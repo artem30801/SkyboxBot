@@ -1,0 +1,19 @@
+{
+  "default": {
+    "debug": true,
+    "debug_scope": 570257083040137237,
+    "owner_ids": [
+      246333265495982080,
+      248892679813857280
+    ],
+    "bot_url": "https://github.com/artem30801/SkyboxBot",
+    "default_manage_group": "Managed",
+    "default_manage_group_desc": "Default group for all managed roles",
+    "max_roles_in_group": 25,
+    "ping_on_error": true
+  },
+  "production": {
+    "debug": false,
+    "debug_scope": null
+  }
+}

@@ -5,7 +5,8 @@ from datetime import datetime
 import emoji
 import dis_snek
 from dis_snek import Embed, Snake, AutocompleteContext
-from dis_snek.models.color import Color
+from dis_snek import FlatUIColors as FlatColors
+from dis_snek.models import Color
 from emoji import UNICODE_EMOJI_ENGLISH
 
 from utils.color import find_color_name, color_names, colors, rgb2hex, hex2rgb
@@ -20,8 +21,8 @@ class BadBotArgument(SkyBotException):
     pass
 
 
-def get_default_embed(guild: dis_snek.Guild, title: Optional[str], color: Optional[Union[str, int, Color]]) -> Embed:
-    embed = Embed(color=color, title=title, timestamp=datetime.now())  # noqa
+def get_default_embed(guild: dis_snek.Guild, title: Optional[str], status: ResponseStatusColors) -> Embed:
+    embed = Embed(color=status.value, title=title)  # noqa
     embed.set_author(name=guild.name, icon_url=guild.icon.url)
     return embed
 
@@ -56,17 +57,35 @@ def is_emoji(emoji_string: str) -> bool:
     return bool(re.fullmatch(r"<:\w{2,}:[0-9]+>", emoji_string))
 
 
-def is_hex(hex_string: str) -> bool:
-    """Checks, if passed string is a valid hex string"""
-    return bool(re.fullmatch(r"#?([a-fA-F0-9]{3})|#?([a-fA-F0-9]{6})", hex_string))
-
-
 def convert_to_db_name(name: str) -> str:
     return name.replace(' ', '_')
 
 
 def convert_to_name(db_name: str) -> str:
     return db_name.replace('_', ' ')
+
+
+def is_hex(hex_string: str) -> bool:
+    """Checks, if passed string is a valid hex string"""
+    return bool(re.fullmatch(r"#?([a-fA-F0-9]{3})|#?([a-fA-F0-9]{6})", hex_string))
+
+
+async def send_with_embed(
+        ctx: dis_snek.InteractionContext,
+        embed_text: Optional[str] = None,
+        embed_title: Optional[str] = None,
+        status_color: ResponseStatusColors = ResponseStatusColors.SUCCESS,
+        **kwargs
+        ) -> dis_snek.Message:
+    """Sends a simple message with text as embed"""
+    embeds = [dis_snek.Embed(title=embed_title, description=embed_text, color=status_color.value)]
+
+    if kw_embed := kwargs.pop("embed", None):
+        embeds.append(kw_embed)
+    if kw_embeds := kwargs.pop("embeds", None):
+        embeds.extend(kw_embeds)
+
+    return await ctx.send(embeds=embeds, **kwargs)
 
 
 async def color_autocomplete(ctx: AutocompleteContext, color: str):
@@ -90,3 +109,9 @@ async def color_autocomplete(ctx: AutocompleteContext, color: str):
         results = [dict(name=f"{name} | {hex_color}", value=hex_color) for name, _, hex_color in results]
 
     await ctx.send(results)
+
+
+def validate_color(color: str):
+    """Removes color description from the incorrect client autocomplete logic and checks, if the color is valid"""
+    if not is_hex(color):
+        raise BadBotArgument(f"'{color}' is not a hex color! Put hex color or use auto-complete results")

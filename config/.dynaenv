@@ -1,0 +1,1 @@
+export ENV_FOR_DYNACONF=default

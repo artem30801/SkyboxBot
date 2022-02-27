@@ -7,18 +7,16 @@ from pathlib import Path
 from typing import Optional
 import inspect
 
-import dis_snek.const
 from motor import motor_asyncio
 
-from dis_snek import AllowedMentions
-from dis_snek.client import Snake, InteractionContext
-from dis_snek.models.enums import Intents
-from dis_snek.models.listener import listen
+from dis_snek import AllowedMentions, logger_name, listen, errors
+from dis_snek import Snake, InteractionContext
+from dis_snek.models import Intents
 
 from beanie import init_beanie
 
 from config import load_settings
-
+from utils import misc as utils
 
 logger = logging.getLogger()
 
@@ -26,7 +24,9 @@ logger = logging.getLogger()
 class Bot(Snake):
     def __init__(self, current_dir, config, initial_scales=None):
         self.current_dir: Path = current_dir
+
         self.config = config
+        self.config.default_manage_group = utils.convert_to_db_name(self.config.default_manage_group)
 
         super().__init__(
             intents=Intents.DEFAULT,
@@ -49,10 +49,13 @@ class Bot(Snake):
 
     def startup(self, bot_token, db_token):
         for extension in self.get_extensions():
-            self.load_extension(extension)
+            try:
+                self.load_extension(extension)
+            except Exception as e:
+                logger.error(f"Failed to load extension {extension}: {e}")
 
         if self.config.debug:
-            self.grow_scale("dis_snek.debug_scale")
+            self.grow_scale("dis_snek.ext.debug_scale")
 
         self.db = motor_asyncio.AsyncIOMotorClient(db_token)
         self.loop.run_until_complete(init_beanie(database=self.db.db_name, document_models=self.models))
@@ -68,12 +71,26 @@ class Bot(Snake):
         print(msg)
 
     async def on_command_error(self, ctx: InteractionContext, error: Exception, *args, **kwargs):
-        logger.error(f"Exception during command execution: {repr(error)}", exc_info=error)
-        if not ctx.responded:
-            await ctx.send(str(error), allowed_mentions=AllowedMentions.none())
+        unexpected = True
+        if isinstance(error, errors.CommandCheckFailure):
+            unexpected = False
+            await send_error(ctx, "Command check failed!\n"
+                                  "Sorry, but it looks like you don't have permission to use this command!")
+        else:
+            await send_error(ctx, str(error)[:2000] or "<No exception text available>")
+
+        if unexpected:
+            logger.error(f"Exception during command execution: {repr(error)}", exc_info=error)
 
     def add_model(self, model):
         self.models.append(model)
+
+
+async def send_error(ctx, msg):
+    if not ctx.responded:
+        await ctx.send(msg, allowed_mentions=AllowedMentions.none(), ephemeral=True)
+    else:
+        logger.warning(f"Already responded to message, error message: {msg}")
 
 
 def main():
@@ -94,8 +111,11 @@ def main():
 
     formatter = logging.Formatter("[%(asctime)s] [%(levelname)-9.9s]-[%(name)-15.15s]: %(message)s")
 
-    snek_logger = logging.getLogger(dis_snek.const.logger_name)
+    logging.setLoggerClass(utils.BotLogger)
+    snek_logger = logging.getLogger(logger_name)
     snek_logger.setLevel(log_level)
+
+    logger.setLevel(log_level)
 
     for handler in handlers:
         handler.setFormatter(formatter)

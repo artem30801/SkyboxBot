@@ -1,6 +1,6 @@
 git+https://github.com/Discord-Snake-Pit/Dis-Snek.git@dev
 dynaconf
-# pymongo[srv]
+pymongo[srv]<4,>=3.12
 beanie
 rapidfuzz
 emoji
