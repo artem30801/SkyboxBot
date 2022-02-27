@@ -1,7 +1,7 @@
 from rapidfuzz import process, fuzz
 
 
-# TODO maybe this needs to be async as heavy fuzzy matching may freeze up evenet loop
+# TODO maybe this needs to be async as heavy fuzzy matching may freeze up event loop
 def fuzzy_autocomplete(query, choices):
     results = process.extract(query, choices, scorer=fuzz.WRatio, limit=25)
 

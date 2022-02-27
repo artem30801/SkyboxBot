@@ -1,6 +1,9 @@
+import logging
 import re
+from enum import Enum
 from typing import Optional, Union
 from datetime import datetime
+from collections import abc
 
 import emoji
 import dis_snek
@@ -12,6 +15,8 @@ from emoji import UNICODE_EMOJI_ENGLISH
 from utils.color import find_color_name, color_names, colors, rgb2hex, hex2rgb
 from utils.fuzz import fuzzy_autocomplete
 
+from scales.permissions import Permissions
+
 
 class SkyBotException(Exception):
     pass
@@ -19,6 +24,53 @@ class SkyBotException(Exception):
 
 class BadBotArgument(SkyBotException):
     pass
+
+
+class BotLogger(logging.getLoggerClass()):
+    db_log_level = 25
+    important_log_level = 29
+
+    def __init__(self, name, level=logging.NOTSET):
+        super().__init__(name, level)
+        # TODO: move to config?
+        logging.addLevelName(self.db_log_level, "DATABASE")
+        logging.addLevelName(self.important_log_level, "IMPORTANT")
+
+    def db(self, msg, *args, **kwargs):
+        if self.isEnabledFor(self.db_log_level):
+            self._log(self.db_log_level, msg, args, **kwargs)
+
+    def command(self, ctx: dis_snek.InteractionContext, msg, *args, **kwargs):
+        self.important(f"{ctx.guild}.{ctx.channel}, by {ctx.author} :: {msg}", *args, **kwargs)
+
+    def important(self, msg, *args, **kwargs):
+        if self.isEnabledFor(self.important_log_level):
+            self._log(self.important_log_level, msg, args, **kwargs)
+
+
+class aenumerate(abc.AsyncIterator):
+    """enumerate for async for"""
+
+    def __init__(self, aiterable, start=0):
+        self._aiterable = aiterable
+        self._i = start - 1
+
+    def __aiter__(self):
+        self._ait = self._aiterable.__aiter__()
+        return self
+
+    async def __anext__(self):
+        # self._ait will raise the apropriate AsyncStopIteration
+        val = await self._ait.__anext__()
+        self._i += 1
+        return self._i, val
+
+
+class ResponseStatusColors(Enum):
+    INFO = FlatColors.BELIZEHOLE,
+    SUCCESS = FlatColors.EMERLAND,
+    INCORRECT_INPUT = FlatColors.CARROT,
+    ERROR = FlatColors.POMEGRANATE,
 
 
 def get_default_embed(guild: dis_snek.Guild, title: Optional[str], status: ResponseStatusColors) -> Embed:
@@ -37,16 +89,17 @@ def member_mention(ctx: dis_snek.InteractionContext, member: dis_snek.Member) ->
     return member.mention if member != ctx.author else "You"
 
 
-def get_developer_ping():
+def get_developer_ping(guild: dis_snek.Guild) -> str:
     # TODO: DO
     return "developers"
 
 
-def can_manage_role(member: dis_snek.Member, role: dis_snek.Role) -> bool:
-    """Checks, if member have permissions to manage this role"""
-    if not member.guild_permissions().MANAGE_ROLES:
-        return False
-    return member.top_role > role
+async def can_manage_role(member: dis_snek.Member, role: dis_snek.Role) -> bool:
+    """Checks, if obj have permissions to manage this role"""
+    # TODO: direct role comparison behaves weird, so comparing positions for now
+    if member.has_permission(dis_snek.Permissions.MANAGE_ROLES) or await Permissions.is_manager(member):
+        return member.top_role and member.top_role.position > role.position
+    return False
 
 
 def is_emoji(emoji_string: str) -> bool:
@@ -61,7 +114,7 @@ def convert_to_db_name(name: str) -> str:
     return name.replace(' ', '_')
 
 
-def convert_to_name(db_name: str) -> str:
+def convert_to_display_name(db_name: str) -> str:
     return db_name.replace('_', ' ')
 
 

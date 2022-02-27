@@ -298,6 +298,8 @@ class RoleSelector(Scale):
         """Assigns a selected role to you or selected obj"""
         await ctx.defer(ephemeral=True)
 
+        print(utils.ResponseStatusColors.ERROR.value)
+
         target = member or ctx.author
         if role in target.roles:
             await send_with_embed(
@@ -748,15 +750,16 @@ class RoleSelector(Scale):
         )
         logger.db(f"Adding tracked role {db_role.name} in group {group.display_name}")
         await db_role.insert()
+        await self.on_group_roles_change(group)
 
     # status: done, tested
-    @staticmethod
-    async def stop_role_tracking(role_id: int):
+    async def stop_role_tracking(self, role_id: int):
         """Removes role from internal database by ID"""
-        db_role = await BotRole.find_one(BotRole.role_id == role_id)
+        db_role = await BotRole.find_one(BotRole.role_id == role_id, fetch_links=True)
         if db_role:
             logger.db(f"Removing tracked role {db_role.name}")
             await db_role.delete()
+            await self.on_group_roles_change(db_role.group)
         else:
             raise utils.BadBotArgument(f"Role with ID {role_id} is not managed by bot")
 
