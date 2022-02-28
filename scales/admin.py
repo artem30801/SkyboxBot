@@ -74,6 +74,7 @@ class Admin(Scale):
         model = await RoleGroup.find_one(RoleGroup.name == "Managed")
         result = await generate_modal(ctx, RoleGroup)
         print(result)
+        await ctx.guild.fetch_custom_emoji()
 
     @test.autocomplete("test")
     async def _test(self, ctx: dis_snek.AutocompleteContext, **kwargs):

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 import inspect
 
+import dis_snek.api.events
 from motor import motor_asyncio
 
 from dis_snek import AllowedMentions, logger_name, listen, errors
@@ -15,6 +16,7 @@ from dis_snek.models import Intents
 
 from beanie import init_beanie
 
+import utils.log as log_utils
 from config import load_settings
 from utils import misc as utils
 
@@ -22,7 +24,7 @@ logger = logging.getLogger()
 
 
 class Bot(Snake):
-    def __init__(self, current_dir, config, initial_scales=None):
+    def __init__(self, current_dir, config):
         self.current_dir: Path = current_dir
 
         self.config = config
@@ -39,6 +41,8 @@ class Bot(Snake):
 
         self.db: Optional[motor_asyncio.AsyncIOMotorClient] = None
         self.models = list()
+
+        self.emojis = dict()
 
     def get_extensions(self):
         current = set(inspect.getmodule(scale).__name__ for scale in self.scales.values())
@@ -59,16 +63,23 @@ class Bot(Snake):
 
         self.db = motor_asyncio.AsyncIOMotorClient(db_token)
         self.loop.run_until_complete(init_beanie(database=self.db.db_name, document_models=self.models))
-        try:
-            self.loop.run_until_complete(self.login(bot_token))
-        except KeyboardInterrupt:
-            self.loop.run_until_complete(self.stop())
+        self.start(bot_token)
 
     @listen()
     async def on_ready(self):
         msg = f"Logged in as {self.user}. Current scales: {', '.join(self.get_extensions())}"
         logger.info(msg)
         print(msg)
+
+        logger.info("Pre-loading system custom emojis!")
+        for emoji in utils.SystemEmojis:
+            home_guild = self.get_guild(self.debug_scope)
+            self.emojis[emoji] = await home_guild.fetch_custom_emoji(emoji.value)
+        logger.info(f"Pre-loaded {len(self.emojis)} system custom emojis!")
+
+    # @listen()
+    # async def on_message_create(self, event: dis_snek.api.events.MessageCreate):
+    #     print(event.message.content)
 
     async def on_command_error(self, ctx: InteractionContext, error: Exception, *args, **kwargs):
         unexpected = True
@@ -84,6 +95,9 @@ class Bot(Snake):
 
     def add_model(self, model):
         self.models.append(model)
+
+    def get_emoji(self, emoji: utils.SystemEmojis):
+        return self.emojis[emoji]
 
 
 async def send_error(ctx, msg):
@@ -111,7 +125,7 @@ def main():
 
     formatter = logging.Formatter("[%(asctime)s] [%(levelname)-9.9s]-[%(name)-15.15s]: %(message)s")
 
-    logging.setLoggerClass(utils.BotLogger)
+    logging.setLoggerClass(log_utils.BotLogger)
     snek_logger = logging.getLogger(logger_name)
     snek_logger.setLevel(log_level)
 

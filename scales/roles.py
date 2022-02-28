@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Tuple, TYPE_CHECKING
+from typing import Optional, List, Tuple, Any, TYPE_CHECKING
 
 import dis_snek
 from bson.objectid import ObjectId
@@ -32,9 +32,10 @@ from dis_snek import (
     ShortText,
     ParagraphText,
 )
-from dis_snek.ext import tasks
+from dis_snek import tasks
 
 # from pydantic import BaseModel
+import utils.log as log_utils
 from scales.permissions import Permissions
 from utils.fuzz import fuzzy_autocomplete, fuzzy_find
 from utils.db import Document
@@ -45,8 +46,7 @@ from utils.misc import send_with_embed, ResponseStatusColors
 if TYPE_CHECKING:
     from main import Bot
 
-logger = logging.getLogger(__name__)
-logger: utils.BotLogger
+logger: log_utils.BotLogger = logging.getLogger(__name__)  # type: ignore
 
 
 class RoleGroup(Document):
@@ -133,6 +133,7 @@ class RoleSelector(Scale):
         await ctx.defer()
         group = await self.role_group_find(group, ctx.guild, use_fuzzy_search=False)
         components = await self.create_selector_components_for_group(group)
+        # TODO GENERATE EMBED FOR STATIC SELECTOR MESSAGE
         message = await ctx.send("Select roles you want to get down below!", components=components)
         message_tracker = RoleSelectorMessage(message_id=message.id,
                                               channel_id=message.channel.id,
@@ -239,10 +240,11 @@ class RoleSelector(Scale):
     @subcommand(base="role", name="list")
     async def role_list(self, ctx: InteractionContext,
                         group: slash_str_option("Group to display", autocomplete=True, required=False) = None,
-                        only_assignable: slash_bool_option("Show only assignable roles", required=False) = False,
+                        only_assignable: slash_bool_option("Show only assignable roles", required=False) = True,
                         ):
         """Shows list of all roles available to you. Roles are grouped by role group"""
         await ctx.defer(ephemeral=False)
+
         embed = utils.get_default_embed(ctx.guild, "Available roles:", ResponseStatusColors.INFO)
         if group:
             groups = [await self.role_group_find(group, ctx.guild)]
@@ -261,8 +263,9 @@ class RoleSelector(Scale):
 
             mentions = []
             async for db_role in db_roles:
-                if role := await ctx.guild.get_role(db_role.role_id):
-                    mentions.append(role.mention)
+                if role := await ctx.guild.fetch_role(db_role.role_id):
+                    emoji = db_role.emoji or self.bot.get_emoji(utils.SystemEmojis.BLANK)
+                    mentions.append(f"{emoji}{role.mention}")
 
             # don't display "empty" groups to users unless this specific group was requested
             if mentions:
@@ -495,7 +498,7 @@ class RoleSelector(Scale):
         for guild in self.bot.guilds:
             await self.sync_roles_for_guild(guild)
 
-    # Status: done, not tested
+    # Status: done, tested
     @subcommand(base="manage", subcommand_group="roles", name="edit")
     async def role_edit(
             self,
@@ -516,45 +519,50 @@ class RoleSelector(Scale):
         if not db_role:
             raise utils.BadBotArgument(f"Role {role.mention} is not in the database and not managed by bot")
 
-        has_changes = False
+        changes: dict[str, tuple[Any, Any]] = dict()
         old_group = None
         if group is not None:
             group = await self.role_group_find(group, ctx.guild, use_fuzzy_search=False)
             if db_role.group != group:
-                logger.db(f"Changing role {db_role.name} group: '{db_role.group.display_name}' -> '{group.display_name}'")
+                changes["Group"] = (db_role.group.display_name, group.display_name)
                 old_group = db_role.group
                 db_role.group = group
-                has_changes = True
 
         if description is not None:
             if description.lower() == "none":
                 description = ""
             if description != db_role.description:
-                logger.db(f"Changing role {db_role.name} description: '{db_role.description}' -> '{description}'")
+                changes["Description"] = (db_role.description, description)
                 db_role.description = description
-                has_changes = True
 
         if emoji:
             if not utils.is_emoji(emoji):
                 raise utils.BadBotArgument(f"'{emoji}' is not a valid emoji!")
             if db_role.emoji != emoji:
-                logger.db(f"Changing role {db_role.name} emoji: '{db_role.emoji}' -> '{emoji}'")
+                changes["Emoji"] = (db_role.emoji, emoji)
                 db_role.emoji = emoji
-                has_changes = True
 
         if assignable is not None and db_role.assignable != assignable:
-            logger.db(f"Changing role {db_role.name} assignable status: {db_role.assignable} -> {assignable}")
+            changes["Assignable"] = (str(db_role.assignable), str(assignable))
             db_role.assignable = assignable
-            has_changes = True
 
-        if has_changes:
+        if changes:
             logger.db(f"Updating DB role {db_role.name}")
+
+            embed = dis_snek.Embed(
+                title=f"Updated the role {role.name} with new parameters",
+                color=ResponseStatusColors.SUCCESS
+            )
+            for name, (before, after) in changes.items():
+                embed.add_field(name, f"{before or '<EMPTY>'} → {after or '<EMPTY>'}")
+                logger.db(f"Changing {name}: '{before}' → '{after}'")
+
             await db_role.save()
             if old_group is not None:
                 await self.on_group_roles_change(old_group)
                 await self.on_group_roles_change(group)
 
-            await send_with_embed(ctx, f"Updated the role {role.mention} with new parameters")
+            await ctx.send(embed=embed)
         else:
             await send_with_embed(
                 ctx,
@@ -699,6 +707,7 @@ class RoleSelector(Scale):
         return await utils.color_autocomplete(ctx, color)
 
     # Status: not done
+    # TODO DO IT WITH MODAL
     @subcommand(base="role", subcommand_group="group", name="edit_roles", description="11")
     async def group_edit_roles(self, ctx: InteractionContext):
         pass
@@ -906,7 +915,7 @@ class RoleSelector(Scale):
             # change during iteration
             db_roles = await BotRole.find(BotRole.group_request(group)).to_list()
             for db_role in db_roles:
-                role = await guild.get_role(db_role.role_id)
+                role = await guild.fetch_role(db_role.role_id)
                 if not role:
                     deleted.add(db_role.name)
                     logger.db(f"Deleting role {db_role.name} for guild {guild.name}, role doesn't exist anymore")
@@ -970,9 +979,15 @@ class RoleSelector(Scale):
     async def on_group_roles_change(self, group: RoleGroup):
         async for selector in RoleSelectorMessage.find(RoleSelectorMessage.group_request(group)):
             selector: RoleSelectorMessage
-            message = await self.bot.cache.fetch_message(selector.channel_id, selector.message_id)
-            logger.important(f"Updating selector message in {message.channel}.{message.guild} on group {group.display_name} update")
-            await message.edit(components=await self.create_selector_components_for_group(group))
+            try:
+                message = await self.bot.cache.fetch_message(selector.channel_id, selector.message_id)
+                logger.important(
+                    f"Updating selector message in {message.channel}.{message.guild} on group {group.display_name} update"
+                )
+                await message.edit(components=await self.create_selector_components_for_group(group))
+            except dis_snek.errors.SnakeException as e:
+                logger.warning(f"Exception during selector update:", exc_info=e)
+                continue
 
     # status: done, not tested
     async def create_selector_components_for_group(self, group: RoleGroup) -> list[list[dis_snek.BaseComponent]]:

@@ -1,16 +1,13 @@
-import logging
+import enum
 import re
 from enum import Enum
-from typing import Optional, Union
-from datetime import datetime
+from typing import Optional
 from collections import abc
 
 import emoji
 import dis_snek
-from dis_snek import Embed, Snake, AutocompleteContext
+from dis_snek import Embed, AutocompleteContext
 from dis_snek import FlatUIColors as FlatColors
-from dis_snek.models import Color
-from emoji import UNICODE_EMOJI_ENGLISH
 
 from utils.color import find_color_name, color_names, colors, rgb2hex, hex2rgb
 from utils.fuzz import fuzzy_autocomplete
@@ -24,28 +21,6 @@ class SkyBotException(Exception):
 
 class BadBotArgument(SkyBotException):
     pass
-
-
-class BotLogger(logging.getLoggerClass()):
-    db_log_level = 25
-    important_log_level = 29
-
-    def __init__(self, name, level=logging.NOTSET):
-        super().__init__(name, level)
-        # TODO: move to config?
-        logging.addLevelName(self.db_log_level, "DATABASE")
-        logging.addLevelName(self.important_log_level, "IMPORTANT")
-
-    def db(self, msg, *args, **kwargs):
-        if self.isEnabledFor(self.db_log_level):
-            self._log(self.db_log_level, msg, args, **kwargs)
-
-    def command(self, ctx: dis_snek.InteractionContext, msg, *args, **kwargs):
-        self.important(f"{ctx.guild}.{ctx.channel}, by {ctx.author} :: {msg}", *args, **kwargs)
-
-    def important(self, msg, *args, **kwargs):
-        if self.isEnabledFor(self.important_log_level):
-            self._log(self.important_log_level, msg, args, **kwargs)
 
 
 class aenumerate(abc.AsyncIterator):
@@ -66,11 +41,11 @@ class aenumerate(abc.AsyncIterator):
         return self._i, val
 
 
-class ResponseStatusColors(Enum):
-    INFO = FlatColors.BELIZEHOLE,
-    SUCCESS = FlatColors.EMERLAND,
-    INCORRECT_INPUT = FlatColors.CARROT,
-    ERROR = FlatColors.POMEGRANATE,
+class ResponseStatusColors(dis_snek.Color, Enum):
+    INFO = FlatColors.BELIZEHOLE.value
+    SUCCESS = FlatColors.EMERLAND.value
+    INCORRECT_INPUT = FlatColors.CARROT.value
+    ERROR = FlatColors.POMEGRANATE.value
 
 
 def get_default_embed(guild: dis_snek.Guild, title: Optional[str], status: ResponseStatusColors) -> Embed:
@@ -108,6 +83,10 @@ def is_emoji(emoji_string: str) -> bool:
         return True
     # Emoji names must be at least 2 characters long and can only contain alphanumeric characters and underscores
     return bool(re.fullmatch(r"<:\w{2,}:[0-9]+>", emoji_string))
+
+
+class SystemEmojis(enum.IntEnum):
+    BLANK = 850426538792321065
 
 
 def convert_to_db_name(name: str) -> str:
