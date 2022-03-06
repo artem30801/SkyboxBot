@@ -161,7 +161,7 @@ class RoleSelector(Scale):
         to_add = []
         to_remove = []
         async for db_role in BotRole.find(BotRole.group_link_request(message_tracker.group)):
-            role = await ctx.guild.get_role(db_role.role_id)
+            role = await ctx.guild.fetch_role(db_role.role_id)
             if db_role.id in choices:
                 if role not in ctx.author.roles:
                     to_add.append(role)
@@ -896,7 +896,7 @@ class RoleSelector(Scale):
         removed = []
         logger.important(f"Removing all roles from group {group.display_name} from {target} by {requester} request")
         async for db_role in BotRole.find(BotRole.group_request(group)):
-            if role := await requester.guild.get_role(db_role.role_id):
+            if role := await requester.guild.fetch_role(db_role.role_id):
                 if role in target.roles:
                     await cls.try_remove_role(requester, target, role, reason)
                     removed.append(role)

@@ -42,12 +42,12 @@ class Permissions(Scale):
         user_id = self.get_member_id(member, user_id)
 
         if await BotAdmins.find_one(BotAdmins.user_id == user_id).exists():
-            raise utils.BadBotArgument(f"User {await self.get_user_mention(ctx, user_id)} already has admin permissions!")
+            raise utils.BadBotArgument(f"User {await self.fetch_user_mention(ctx, user_id)} already has admin permissions!")
 
         admin = BotAdmins(user_id=user_id)
         await admin.insert()
 
-        await ctx.send(f"Granted admin permissions to user {await self.get_user_mention(ctx, user_id)}!")
+        await ctx.send(f"Granted admin permissions to user {await self.fetch_user_mention(ctx, user_id)}!")
 
     @check(is_owner())
     @subcommand(base="permissions", subcommand_group="admin", name="revoke")
@@ -62,11 +62,11 @@ class Permissions(Scale):
         admin: "BotAdmins" = await BotAdmins.find_one(BotAdmins.user_id == user_id)
 
         if not admin:
-            raise utils.BadBotArgument(f"User {await self.get_user_mention(ctx, user_id)} does not have admin permissions!")
+            raise utils.BadBotArgument(f"User {await self.fetch_user_mention(ctx, user_id)} does not have admin permissions!")
 
         await admin.delete()
 
-        await ctx.send(f"Revoke admin permissions from user {await self.get_user_mention(ctx, user_id)}!")
+        await ctx.send(f"Revoke admin permissions from user {await self.fetch_user_mention(ctx, user_id)}!")
 
     @subcommand(base="permissions", subcommand_group="admin", name="check")
     async def admin_check_cmd(self, ctx: InteractionContext,
@@ -83,7 +83,7 @@ class Permissions(Scale):
 
         is_admin = await BotAdmins.find_one(BotAdmins.user_id == user_id).exists()
 
-        await ctx.send(f"{await self.get_user_mention(ctx, user_id)} {'***is***' if is_admin else 'is ***not***'} admin!")
+        await ctx.send(f"{await self.fetch_user_mention(ctx, user_id)} {'***is***' if is_admin else 'is ***not***'} admin!")
 
     @subcommand(base="permissions", subcommand_group="admin", name="list")
     async def admin_list(self, ctx: InteractionContext):
@@ -94,7 +94,7 @@ class Permissions(Scale):
         embed = utils.get_default_embed(ctx.guild, "Bot admins list", utils.ResponseStatusColors.INFO)
 
         embed.add_field(name="Admins:",
-                        value="\n".join([await self.get_user_mention(ctx, admin.user_id) for admin in
+                        value="\n".join([await self.fetch_user_mention(ctx, admin.user_id) for admin in
                                          admins]) or "No admins in database")
 
         await ctx.send(embed=embed)
@@ -112,16 +112,16 @@ class Permissions(Scale):
         guild_id = self.get_id(ctx.guild, guild_id)
 
         if await BotManagers.find_one(BotManagers.member_id == user_id, BotManagers.guild_id == guild_id).exists():
-            raise utils.BadBotArgument(f"User {await self.get_user_mention(ctx, user_id)} "
+            raise utils.BadBotArgument(f"User {await self.fetch_user_mention(ctx, user_id)} "
                                        f"already has guild manager permissions "
-                                       f"in {await self.get_guild_mention(guild_id)}!")
+                                       f"in {await self.fetch_guild_mention(guild_id)}!")
 
         manager = BotManagers(member_id=user_id, guild_id=guild_id)
         await manager.insert()
 
         await ctx.send(f"Granted guild manager permissions "
-                       f"to user {await self.get_user_mention(ctx, user_id)} "
-                       f"in {await self.get_guild_mention(guild_id)}!")
+                       f"to user {await self.fetch_user_mention(ctx, user_id)} "
+                       f"in {await self.fetch_guild_mention(guild_id)}!")
 
     @subcommand(base="permissions", subcommand_group="manager", name="revoke")
     async def manager_revoke(self, ctx: InteractionContext,
@@ -137,15 +137,15 @@ class Permissions(Scale):
         manager: "BotManagers" = await BotManagers.find_one(BotManagers.member_id == user_id, BotManagers.guild_id == guild_id)
 
         if not manager:
-            raise utils.BadBotArgument(f"User {await self.get_user_mention(ctx, user_id)} "
+            raise utils.BadBotArgument(f"User {await self.fetch_user_mention(ctx, user_id)} "
                                        f"does not have guild manager permissions"
-                                       f"in {await self.get_guild_mention(guild_id)}!")
+                                       f"in {await self.fetch_guild_mention(guild_id)}!")
 
         await manager.delete()
 
         await ctx.send(f"Revoke guild manager permissions "
-                       f"from user {await self.get_user_mention(ctx, user_id)}"
-                       f"in {await self.get_guild_mention(guild_id)}!")
+                       f"from user {await self.fetch_user_mention(ctx, user_id)}"
+                       f"in {await self.fetch_guild_mention(guild_id)}!")
 
     # @subcommand(base="permissions", subcommand_group="manager", name="list")
     # async def manager_list(self, ctx: InteractionContext):
@@ -208,13 +208,13 @@ class Permissions(Scale):
         except ValueError:
             raise utils.BadBotArgument("'member' or 'user_id' should be provided!")
 
-    async def get_user_mention(self, ctx, user_id):
+    async def fetch_user_mention(self, ctx, user_id):
         user = None
         if ctx.guild:
-            user = await self.bot.get_member(user_id, ctx.guild)
+            user = await self.bot.fetch_member(user_id, ctx.guild)
 
         if user is None:  # obj not found or not in guild
-            user = await self.bot.get_user(user_id)
+            user = await self.bot.fetch_user(user_id)
         else:
             user = user.user  # obj is found
 
@@ -225,8 +225,8 @@ class Permissions(Scale):
 
         return mention
 
-    async def get_guild_mention(self, guild_id):
-        guild = await self.bot.get_guild(guild_id)
+    async def fetch_guild_mention(self, guild_id):
+        guild = await self.bot.fetch_guild(guild_id)
 
         if guild is None:
             mention = f"`{guild_id}`: (Guild not found)"
