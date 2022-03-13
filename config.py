@@ -11,7 +11,6 @@ def load_settings():
     )
 
     settings.validators.register(Validator("DISCORD_TOKEN", "DATABASE_ADDRESS", "OWNER_IDS", must_exist=True))
-
     settings.validators.validate()
 
     return settings

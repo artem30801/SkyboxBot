@@ -1,12 +1,13 @@
-import dis_snek
-from dis_snek import Context, Modal, ShortText, ParagraphText
+import asyncio
+from typing import Any, Callable, Optional, Type
 
-from typing import Optional, Callable, Any, Type
+import attr
+import dis_snek
+from dis_snek import Context, Modal, ParagraphText, ShortText
+from pydantic.fields import ModelField
+
 from utils import misc as utils
 from utils.db import Document
-import attr
-import asyncio
-from pydantic.fields import ModelField
 
 
 @attr.define()

@@ -1,18 +1,16 @@
 import enum
 import re
+from collections import abc
 from enum import Enum
 from typing import Optional
-from collections import abc
 
-import emoji
 import dis_snek
-from dis_snek import Embed, AutocompleteContext
+import emoji
+from dis_snek import AutocompleteContext, Embed
 from dis_snek import FlatUIColors as FlatColors
 
-from utils.color import find_color_name, color_names, colors, rgb2hex, hex2rgb
+from utils.color import color_names, colors, find_color_name, hex2rgb, rgb2hex
 from utils.fuzz import fuzzy_autocomplete
-
-from scales.permissions import Permissions
 
 
 class SkyBotException(Exception):
@@ -69,14 +67,6 @@ def get_developer_ping(guild: dis_snek.Guild) -> str:
     return "developers"
 
 
-async def can_manage_role(member: dis_snek.Member, role: dis_snek.Role) -> bool:
-    """Checks, if obj have permissions to manage this role"""
-    # TODO: direct role comparison behaves weird, so comparing positions for now
-    if member.has_permission(dis_snek.Permissions.MANAGE_ROLES) or await Permissions.is_manager(member):
-        return member.top_role and member.top_role.position > role.position
-    return False
-
-
 def is_emoji(emoji_string: str) -> bool:
     """Checks, if passed string is emoji (discord or UTF one)"""
     if emoji.is_emoji(emoji_string):
@@ -90,11 +80,11 @@ class SystemEmojis(enum.IntEnum):
 
 
 def convert_to_db_name(name: str) -> str:
-    return name.replace(' ', '_')
+    return name.replace(" ", "_")
 
 
 def convert_to_display_name(db_name: str) -> str:
-    return db_name.replace('_', ' ')
+    return db_name.replace("_", " ")
 
 
 def is_hex(hex_string: str) -> bool:
@@ -103,12 +93,12 @@ def is_hex(hex_string: str) -> bool:
 
 
 async def send_with_embed(
-        ctx: dis_snek.InteractionContext,
-        embed_text: Optional[str] = None,
-        embed_title: Optional[str] = None,
-        status_color: ResponseStatusColors = ResponseStatusColors.SUCCESS,
-        **kwargs
-        ) -> dis_snek.Message:
+    ctx: dis_snek.InteractionContext,
+    embed_text: Optional[str] = None,
+    embed_title: Optional[str] = None,
+    status_color: ResponseStatusColors = ResponseStatusColors.SUCCESS,
+    **kwargs,
+) -> dis_snek.Message:
     """Sends a simple message with text as embed"""
     embeds = [dis_snek.Embed(title=embed_title, description=embed_text, color=status_color.value)]
 

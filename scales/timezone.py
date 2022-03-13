@@ -1,18 +1,16 @@
-import dis_snek
-from dis_snek import Scale, InteractionContext, AutocompleteContext, subcommand, slash_str_option, slash_int_option
-
-from utils.fuzz import fuzzy_autocomplete, fuzzy_find
-
-from utils.db import Document
-from pydantic import BaseModel, Field
-
 from collections import defaultdict
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 
 import dateparser
+import dis_snek
 import pytz
 from dateutil import tz
+from dis_snek import AutocompleteContext, InteractionContext, Scale, slash_int_option, slash_str_option, subcommand
+from pydantic import BaseModel, Field
+
+from utils.db import Document
+from utils.fuzz import fuzzy_autocomplete, fuzzy_find
 
 
 class UserTimezone(Document):
@@ -31,7 +29,7 @@ class Timezones(Scale):
             timezone = pytz.timezone(name)
             now = datetime.now(timezone)
             offset = self.format_offset(now)
-            abbreviation = now.strftime('%Z')
+            abbreviation = now.strftime("%Z")
 
             self.offsets[offset].append(name)
             self.abbreviations[abbreviation].append(name)
@@ -40,9 +38,15 @@ class Timezones(Scale):
         print(self.offsets)
 
     @subcommand(base="timezone", name="set")
-    async def timezone_set(self, ctx: InteractionContext,
-                           timezone: slash_str_option("Name or offset of the timezone you are in", required=True, autocomplete=True),
-                           ):
+    async def timezone_set(
+        self,
+        ctx: InteractionContext,
+        timezone: slash_str_option(
+            "Name or offset of the timezone you are in",
+            required=True,
+            autocomplete=True,
+        ),
+    ):
         pass
 
     @timezone_set.autocomplete("timezone")
@@ -80,7 +84,7 @@ class Timezones(Scale):
         results = []
         fuzzy_results = fuzzy_autocomplete(query, list(data_dict.keys()))
         for abbreviation, score, _ in fuzzy_results:
-            entries = [(name, score+additional_score) for name in data_dict[abbreviation]]
+            entries = [(name, score + additional_score) for name in data_dict[abbreviation]]
             results.extend(entries)
 
         return results
@@ -90,13 +94,14 @@ class Timezones(Scale):
         timezone = pytz.timezone(name)
         now = datetime.now(timezone)
         offset = cls.format_offset(now)
-        abbreviation = now.strftime('%Z')
+        abbreviation = now.strftime("%Z")
         return f"{offset} | {abbreviation} | {name}"
 
     @staticmethod
     def format_offset(now):
-        offset = now.strftime('%z')
+        offset = now.strftime("%z")
         return f"{offset[:3]}:{offset[3:]}"
+
 
 # a = tz.gettz('Pacific/Kiritimati')
 # # settings={'RETURN_AS_TIMEZONE_AWARE': True}

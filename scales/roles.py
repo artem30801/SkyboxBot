@@ -1,47 +1,48 @@
 import logging
-from typing import Optional, List, Tuple, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import dis_snek
-from bson.objectid import ObjectId
 from beanie import Indexed, Link
-from beanie.operators import Set, In
-from pydantic import Field
+from beanie.operators import In, Set
+from bson.objectid import ObjectId
 from dis_snek import (
-    Scale,
-    InteractionContext,
-    ComponentContext,
+    MISSING,
+    Absent,
     AutocompleteContext,
+    Button,
+    ComponentContext,
+    EmbedField,
+    Guild,
+    InteractionContext,
+    Modal,
     ModalContext,
+    ParagraphText,
+    Role,
+    Scale,
     Select,
     SelectOption,
-    Button,
-    Role,
-    Absent,
-    MISSING,
-)
-from dis_snek import (
-    slash_str_option,
+    ShortText,
+    check,
+    component_callback,
     slash_bool_option,
-    slash_role_option,
     slash_int_option,
+    slash_role_option,
+    slash_str_option,
     slash_user_option,
     subcommand,
-    component_callback,
-    check,
-    Modal,
-    ShortText,
-    ParagraphText,
+    tasks,
 )
-from dis_snek import tasks
+from pydantic import Field
 
 # from pydantic import BaseModel
+import scales.permissions
 import utils.log as log_utils
-from scales.permissions import Permissions
-from utils.fuzz import fuzzy_autocomplete, fuzzy_find
-from utils.db import Document
-from utils import modals as modal_utils
 import utils.misc as utils
-from utils.misc import send_with_embed, ResponseStatusColors
+from scales.permissions import Permissions, can_manage_role
+from utils import modals as modal_utils
+from utils.db import Document
+from utils.fuzz import fuzzy_autocomplete, fuzzy_find
+from utils.misc import ResponseStatusColors, send_with_embed
 
 if TYPE_CHECKING:
     from main import Bot
@@ -126,19 +127,21 @@ class RoleSelector(Scale):
         description="Create a selector, that allows to assign roles instead of the default /role assign command",
     )
     async def create_static(
-            self,
-            ctx: InteractionContext,
-            group: slash_str_option("Group of roles to make selector with", required=True, autocomplete=True),
+        self,
+        ctx: InteractionContext,
+        group: slash_str_option("Group of roles to make selector with", required=True, autocomplete=True),
     ):
         await ctx.defer()
         group = await self.role_group_find(group, ctx.guild, use_fuzzy_search=False)
         components = await self.create_selector_components_for_group(group)
-        # TODO GENERATE EMBED FOR STATIC SELECTOR MESSAGE
-        message = await ctx.send("Select roles you want to get down below!", components=components)
-        message_tracker = RoleSelectorMessage(message_id=message.id,
-                                              channel_id=message.channel.id,
-                                              group=group,
-                                              )
+        embed = await self.create_selector_embed_for_group(group=group, guild=ctx.guild)
+
+        message = await ctx.send(embed=embed, components=components)
+        message_tracker = RoleSelectorMessage(
+            message_id=message.id,
+            channel_id=message.channel.id,
+            group=group,
+        )
         await message_tracker.insert()
         logger.command(ctx, f"Created a selector for group {group.display_name} in {ctx.channel}")
 
@@ -194,8 +197,11 @@ class RoleSelector(Scale):
         added = " ".join([role.mention for role in to_add])
         removed = " ".join([role.mention for role in to_remove])
         if not added and not removed:
-            await send_with_embed(ctx, embed_text="No changes in roles were made",
-                                  status_color=ResponseStatusColors.INCORRECT_INPUT)
+            await send_with_embed(
+                ctx,
+                embed_text="No changes in roles were made",
+                status_color=ResponseStatusColors.INCORRECT_INPUT,
+            )
         elif added and not removed:
             await send_with_embed(ctx, embed_title="Added roles", embed_text=added)
         elif removed and not added:
@@ -219,29 +225,36 @@ class RoleSelector(Scale):
             ctx.author,
             ctx.author,
             group,
-            reason=f"Self-removed using {self.bot.user.display_name}'s selector"
+            reason=f"Self-removed using {self.bot.user.display_name}'s selector",
         )
         if removed_roles:
-            response = f"Removed {len(removed_roles)} roles" if len(
-                removed_roles) > 1 else f"Removed role {removed_roles[0].mention}"
+            response = (
+                f"Removed {len(removed_roles)} roles"
+                if len(removed_roles) > 1
+                else f"Removed role {removed_roles[0].mention}"
+            )
             await send_with_embed(ctx, embed_title="Removed roles", embed_text=response, ephemeral=True)
-            logger.command(ctx,
-                           f"Used role selector, removed roles [{' '.join(role.mention for role in removed_roles)}]")
+            logger.command(
+                ctx,
+                f"Used role selector, removed roles [{' '.join(role.mention for role in removed_roles)}]",
+            )
         else:
             await send_with_embed(
                 ctx,
                 "You don't have any role from this group",
                 status_color=ResponseStatusColors.INCORRECT_INPUT,
-                ephemeral=True
+                ephemeral=True,
             )
             logger.command(ctx, f"Used role selector, no roles were removed")
 
     # Status: done, tested
     @subcommand(base="role", name="list")
-    async def role_list(self, ctx: InteractionContext,
-                        group: slash_str_option("Group to display", autocomplete=True, required=False) = None,
-                        only_assignable: slash_bool_option("Show only assignable roles", required=False) = True,
-                        ):
+    async def role_list(
+        self,
+        ctx: InteractionContext,
+        group: slash_str_option("Group to display", autocomplete=True, required=False) = None,
+        only_assignable: slash_bool_option("Show only assignable roles", required=False) = True,
+    ):
         """Shows list of all roles available to you. Roles are grouped by role group"""
         await ctx.defer(ephemeral=False)
 
@@ -256,26 +269,11 @@ class RoleSelector(Scale):
 
         db_group: RoleGroup
         for db_group in groups:
-            db_roles = BotRole.find(BotRole.group_request(db_group))
-            if only_assignable:
-                db_roles.find(BotRole.assignable == True)
-            db_role: BotRole
-
-            mentions = []
-            async for db_role in db_roles:
-                if role := await ctx.guild.fetch_role(db_role.role_id):
-                    emoji = db_role.emoji or self.bot.get_emoji(utils.SystemEmojis.BLANK)
-                    mentions.append(f"{emoji}{role.mention}")
+            fields = await self.get_roles_list_fields(group=db_group, guild=ctx.guild, only_assignable=only_assignable)
 
             # don't display "empty" groups to users unless this specific group was requested
-            if mentions:
-                n = 9  # 9 role mentions max in one embed field
-                mentions_regrouped = [mentions[i:i + n] for i in range(0, len(mentions), n)]
-                for i, mentions_group in enumerate(mentions_regrouped, 1):
-                    group_len = len(mentions_regrouped)
-                    name = db_group.display_name if group_len == 1 else f"{db_group.display_name} [{i}/{group_len}]"
-                    embed.add_field(name=name, value="\n".join(mentions_group), inline=True)
-
+            if fields:
+                embed.fields += fields
             elif group:
                 embed.add_field(name=db_group.display_name, value="*No assignable roles available*")
 
@@ -293,10 +291,10 @@ class RoleSelector(Scale):
     # Status: done, tested
     @subcommand(base="role", name="assign")
     async def role_assign(
-            self,
-            ctx: InteractionContext,
-            role: slash_role_option("Role to assign", required=True),
-            member: slash_user_option("Member to assign the role to", required=False) = None
+        self,
+        ctx: InteractionContext,
+        role: slash_role_option("Role to assign", required=True),
+        member: slash_user_option("Member to assign the role to", required=False) = None,
     ):
         """Assigns a selected role to you or selected obj"""
         await ctx.defer(ephemeral=True)
@@ -313,18 +311,25 @@ class RoleSelector(Scale):
             return
 
         # all checks are done inside try_assign_role
-        await self.try_assign_role(requester=ctx.author, target=target, role=role,
-                                   reason=f"Assigned by {ctx.author.display_name} by using bot command")
-        await send_with_embed(ctx, f"Assigned role {role.mention} to {utils.member_mention(ctx, target).lower()}")
+        await self.try_assign_role(
+            requester=ctx.author,
+            target=target,
+            role=role,
+            reason=f"Assigned by {ctx.author.display_name} by using bot command",
+        )
+        await send_with_embed(
+            ctx,
+            f"Assigned role {role.mention} to {utils.member_mention(ctx, target).lower()}",
+        )
         logger.command(ctx, f"Assigned role {role} to {target}")
 
     # Status: done, tested
     @subcommand(base="role", name="unassign")
     async def role_unassign(
-            self,
-            ctx: InteractionContext,
-            role: slash_role_option("Role to assign", required=True),
-            member: slash_user_option("Member to assign the role to", required=False) = None
+        self,
+        ctx: InteractionContext,
+        role: slash_role_option("Role to assign", required=True),
+        member: slash_user_option("Member to assign the role to", required=False) = None,
     ):
         """Removes a role from you or selected obj"""
         await ctx.defer(ephemeral=True)
@@ -338,23 +343,31 @@ class RoleSelector(Scale):
             )
             return
 
-        await self.try_remove_role(requester=ctx.author, target=target, role=role,
-                                   reason=f"Removed by {ctx.author.nickname} by using bot command")
-        await send_with_embed(ctx, f"Removed role {role.mention} from {utils.member_mention(ctx, target).lower()}")
+        await self.try_remove_role(
+            requester=ctx.author,
+            target=target,
+            role=role,
+            reason=f"Removed by {ctx.author.nickname} by using bot command",
+        )
+        await send_with_embed(
+            ctx,
+            f"Removed role {role.mention} from {utils.member_mention(ctx, target).lower()}",
+        )
         logger.command(ctx, f"Removed role {role} from {target}")
 
     # Status: done, tested
     @check(Permissions.check_manager)
     @subcommand(base="manage", subcommand_group="roles", name="track_one")
     async def role_track_role(
-            self,
-            ctx: InteractionContext,
-            role: slash_role_option("Role to manage", required=True),
-            group: slash_str_option("Group to add new role to", autocomplete=True, required=False) = None,
-            description: slash_str_option("Description for this role", required=False) = "",
-            emoji: slash_str_option("Emoji for this role", required=False) = None,
-            assignable: slash_bool_option("Should be users allowed to assign this role for themselves",
-                                          required=False) = False,
+        self,
+        ctx: InteractionContext,
+        role: slash_role_option("Role to manage", required=True),
+        group: slash_str_option("Group to add new role to", autocomplete=True, required=False) = None,
+        description: slash_str_option("Description for this role", required=False) = "",
+        emoji: slash_str_option("Emoji for this role", required=False) = None,
+        assignable: slash_bool_option(
+            "Should be users allowed to assign this role for themselves", required=False
+        ) = False,
     ):
         """Allows bot to manage this role and assign it to the server members by request"""
         await ctx.defer(ephemeral=True)
@@ -362,11 +375,20 @@ class RoleSelector(Scale):
         if group:
             group = await self.role_group_find(group, ctx.guild, use_fuzzy_search=False)
 
-        await self.track_role(ctx, role, group, description=description, emoji=emoji, assignable=assignable)
+        await self.track_role(
+            ctx,
+            role,
+            group,
+            description=description,
+            emoji=emoji,
+            assignable=assignable,
+        )
 
         group_name = group.display_name if group else self.bot.config.default_manage_group
-        await send_with_embed(ctx,
-                              f"Role {role.mention} is managed by bot from now and put in the group '{group_name}'")
+        await send_with_embed(
+            ctx,
+            f"Role {role.mention} is managed by bot from now and put in the group '{group_name}'",
+        )
 
     # Status: done, tested
     @role_track_role.autocomplete("group")
@@ -377,9 +399,9 @@ class RoleSelector(Scale):
     @check(Permissions.check_manager)
     @subcommand(base="manage", subcommand_group="roles", name="track_all")
     async def role_track_all(
-            self,
-            ctx: InteractionContext,
-            group: slash_str_option("Group to add new role to", autocomplete=True, required=False) = None
+        self,
+        ctx: InteractionContext,
+        group: slash_str_option("Group to add new role to", autocomplete=True, required=False) = None,
     ):
         """Allows bot to manage all roles, that it is allowed to manage by discord"""
         # await ctx.defer(ephemeral=True)
@@ -393,8 +415,7 @@ class RoleSelector(Scale):
 
         modal = Modal(
             title="Track roles",
-            components=
-            [
+            components=[
                 ShortText(
                     label="Instructions",
                     value="Remove roles from list below to not track them",
@@ -403,14 +424,15 @@ class RoleSelector(Scale):
                 ParagraphText(
                     label="List all roles to track",
                     custom_id="roles_names",
-                    value="\n".join(role.name for role in to_track)
-                )
-            ]
+                    value="\n".join(role.name for role in to_track),
+                ),
+            ],
         )
 
         await ctx.send_modal(modal)
 
         response = await self.bot.wait_for_modal(modal, timeout=15 * 60)
+        await response.defer()
         new_roles = []
 
         roles_names = response.kwargs["roles_names"].split("\n")
@@ -433,9 +455,9 @@ class RoleSelector(Scale):
         embed.add_field(
             name="Skipped",
             value=f"**{len(ctx.guild.roles) - len(to_track) - 1}** roles skipped automatically\n"
-                  f"**{len(to_track) - len(new_roles)}** roles skipped by selection in modal"
+            f"**{len(to_track) - len(new_roles)}** roles skipped by selection in modal",
         )
-        await ctx.send(embed=embed)
+        await response.send(embed=embed)
 
     # Status: done, tested
     @role_track_all.autocomplete("group")
@@ -446,9 +468,9 @@ class RoleSelector(Scale):
     @check(Permissions.check_manager)
     @subcommand(base="manage", subcommand_group="roles", name="stop_tracking")
     async def role_stop_track_role(
-            self,
-            ctx: InteractionContext,
-            role: slash_role_option("Role to stop tracking", required=True),
+        self,
+        ctx: InteractionContext,
+        role: slash_role_option("Role to stop tracking", required=True),
     ):
         """Stops bot from managing the role"""
         await ctx.defer(ephemeral=True)
@@ -501,14 +523,15 @@ class RoleSelector(Scale):
     # Status: done, tested
     @subcommand(base="manage", subcommand_group="roles", name="edit")
     async def role_edit(
-            self,
-            ctx: InteractionContext,
-            role: slash_role_option("Role to edit", required=True),
-            group: slash_str_option("Group to add new role to", autocomplete=True, required=False) = None,
-            description: slash_str_option("Description for this role", required=False) = None,
-            emoji: slash_str_option("Emoji for this role", required=False) = None,
-            assignable: slash_bool_option("Should be users allowed to assign this role for themselves",
-                                          required=False) = None,
+        self,
+        ctx: InteractionContext,
+        role: slash_role_option("Role to edit", required=True),
+        group: slash_str_option("Group to add new role to", autocomplete=True, required=False) = None,
+        description: slash_str_option("Description for this role", required=False) = None,
+        emoji: slash_str_option("Emoji for this role", required=False) = None,
+        assignable: slash_bool_option(
+            "Should be users allowed to assign this role for themselves", required=False
+        ) = None,
     ):
         """Allows editing database properties of the role"""
         await ctx.defer(ephemeral=True)
@@ -551,7 +574,7 @@ class RoleSelector(Scale):
 
             embed = dis_snek.Embed(
                 title=f"Updated the role {role.name} with new parameters",
-                color=ResponseStatusColors.SUCCESS
+                color=ResponseStatusColors.SUCCESS,
             )
             for name, (before, after) in changes.items():
                 embed.add_field(name, f"{before or '<EMPTY>'} → {after or '<EMPTY>'}")
@@ -577,20 +600,27 @@ class RoleSelector(Scale):
     # status: done, tested
     @subcommand(base="manage", subcommand_group="groups", name="add")
     async def group_add(
-            self,
-            ctx: InteractionContext,
-            name: slash_str_option("group name", required=True),
-            color: slash_str_option("Color theme of the group", autocomplete=True, required=False) = None,
-            exclusive_roles: slash_bool_option("Should the person be allowed to have only one role from this group",
-                                               required=False) = False,
-            description: slash_str_option("group description", required=False) = "",
+        self,
+        ctx: InteractionContext,
+        name: slash_str_option("group name", required=True),
+        color: slash_str_option("Color theme of the group", autocomplete=True, required=False) = None,
+        exclusive_roles: slash_bool_option(
+            "Should the person be allowed to have only one role from this group",
+            required=False,
+        ) = False,
+        description: slash_str_option("group description", required=False) = "",
     ):
         """Adds a role group with selected name and description"""
         await ctx.defer(ephemeral=True)
         if color:
             utils.validate_color(color)
-        group = await self.create_new_role_group(guild=ctx.guild, name=name, color=color,
-                                                 exclusive_roles=exclusive_roles, description=description)
+        group = await self.create_new_role_group(
+            guild=ctx.guild,
+            name=name,
+            color=color,
+            exclusive_roles=exclusive_roles,
+            description=description,
+        )
         await send_with_embed(ctx, f"Created role group '{group.display_name}'")
 
     # Status: done, tested
@@ -601,11 +631,14 @@ class RoleSelector(Scale):
     # status: done, tested
     @subcommand(base="manage", subcommand_group="groups", name="delete")
     async def group_delete(
-            self,
-            ctx: InteractionContext,
-            group: slash_str_option("Group to delete", autocomplete=True, required=True),
-            transfer_group: slash_str_option("Roles from the deleted group will be moved here", autocomplete=True,
-                                             required=True),
+        self,
+        ctx: InteractionContext,
+        group: slash_str_option("Group to delete", autocomplete=True, required=True),
+        transfer_group: slash_str_option(
+            "Roles from the deleted group will be moved here",
+            autocomplete=True,
+            required=True,
+        ),
     ):
         """Deletes selected group and moves roles from it to the other group or deletes it"""
         await ctx.defer(ephemeral=True)
@@ -617,7 +650,8 @@ class RoleSelector(Scale):
             transfer_group = await self.role_group_find(transfer_group, ctx.guild, use_fuzzy_search=False)
         if group == transfer_group:
             raise utils.BadBotArgument(
-                f"Transfer group and group to delete are the same! Use '{self.delete_roles_option}' option to delete roles with a group")
+                f"Transfer group and group to delete are the same! Use '{self.delete_roles_option}' option to delete roles with a group"
+            )
 
         group_roles = BotRole.find(BotRole.group_request(group))
         if transfer_group:
@@ -635,7 +669,7 @@ class RoleSelector(Scale):
         roles_action_text = f"moved to '{transfer_group.display_name}'" if transfer_group else "untracked"
         await send_with_embed(
             ctx,
-            f"Group '{group.display_name}' was deleted, roles from '{group.display_name}' were {roles_action_text}"
+            f"Group '{group.display_name}' was deleted, roles from '{group.display_name}' were {roles_action_text}",
         )
 
     # Status: done, tested
@@ -651,15 +685,17 @@ class RoleSelector(Scale):
     # Status: done, tested
     @subcommand(base="manage", subcommand_group="groups", name="edit")
     async def group_edit(
-            self,
-            ctx: InteractionContext,
-            group: slash_str_option("Group to edit", autocomplete=True, required=True),
-            priority: slash_int_option("Priority of the group (affects ordering)", required=False) = None,
-            name: slash_str_option("Name of the group", required=False) = None,
-            color: slash_str_option("Color theme of the group", autocomplete=True, required=False) = None,
-            exclusive_roles: slash_bool_option("Should the person be allowed to have only one role from this group",
-                                               required=False) = None,
-            description: slash_str_option("Description of this group. Use 'None' to delete the description") = None
+        self,
+        ctx: InteractionContext,
+        group: slash_str_option("Group to edit", autocomplete=True, required=True),
+        priority: slash_int_option("Priority of the group (affects ordering)", required=False) = None,
+        name: slash_str_option("Name of the group", required=False) = None,
+        color: slash_str_option("Color theme of the group", autocomplete=True, required=False) = None,
+        exclusive_roles: slash_bool_option(
+            "Should the person be allowed to have only one role from this group",
+            required=False,
+        ) = None,
+        description: slash_str_option("Description of this group. Use 'None' to delete the description") = None,
     ):
         """Edits parameters of the existing group"""
         await ctx.defer(ephemeral=True)
@@ -682,7 +718,9 @@ class RoleSelector(Scale):
             logger.db(f"Updating group {group.display_name} color: '{group.color}' -> '{color}'")
             group.color = color
         if exclusive_roles and exclusive_roles != group.exclusive_roles:
-            logger.db(f"Updating group {group.display_name} exclusivity: '{group.exclusive_roles}' -> '{exclusive_roles}'")
+            logger.db(
+                f"Updating group {group.display_name} exclusivity: '{group.exclusive_roles}' -> '{exclusive_roles}'"
+            )
             group.exclusive_roles = exclusive_roles
         if description:
             if description.lower() == "none":
@@ -714,13 +752,13 @@ class RoleSelector(Scale):
 
     # status: done, tested
     async def track_role(
-            self,
-            ctx: InteractionContext,
-            role: Role,
-            group: Optional[RoleGroup] = None,
-            description: str = "",
-            emoji: Optional[str] = None,
-            assignable: bool = False,
+        self,
+        ctx: InteractionContext,
+        role: Role,
+        group: Optional[RoleGroup] = None,
+        description: str = "",
+        emoji: Optional[str] = None,
+        assignable: bool = False,
     ):
         """Adds role to the internal database"""
         can_track, reason = await self.check_role_for_tracking(role)
@@ -737,9 +775,11 @@ class RoleSelector(Scale):
                 RoleGroup.guild_id == ctx.guild_id,
             )
             if not group:
-                group = await self.create_new_role_group(guild=ctx.guild,
-                                                         name=self.bot.config.default_manage_group,
-                                                         description=self.bot.config.default_manage_group_desc)
+                group = await self.create_new_role_group(
+                    guild=ctx.guild,
+                    name=self.bot.config.default_manage_group,
+                    description=self.bot.config.default_manage_group_desc,
+                )
 
         # Check that we can add more roles to the group, if that's not a default group
         if group.name != self.bot.config.default_manage_group:
@@ -747,7 +787,8 @@ class RoleSelector(Scale):
             if existing_roles_num >= self.bot.config.max_roles_in_group:
                 raise utils.BadBotArgument(
                     f"Group {group.display_name} has too much roles already! "
-                    f"One group can't have more than {self.bot.config.max_roles_in_group} roles")
+                    f"One group can't have more than {self.bot.config.max_roles_in_group} roles"
+                )
 
         db_role = BotRole(
             role_id=role.id,
@@ -774,28 +815,39 @@ class RoleSelector(Scale):
 
     # status: done, tested
     @staticmethod
-    async def create_new_role_group(guild: dis_snek.Guild, name: str, color: Optional[str] = None,
-                                    exclusive_roles: bool = False, description: str = ""):
+    async def create_new_role_group(
+        guild: dis_snek.Guild,
+        name: str,
+        color: Optional[str] = None,
+        exclusive_roles: bool = False,
+        description: str = "",
+    ):
         """Creates a new role group for the guild, checks for collisions"""
         name = utils.convert_to_db_name(name)
         await RoleGroup.validate_name(group_name=name, guild=guild)
 
         priority = await RoleGroup.find(RoleGroup.guild_id == guild.id).max("priority") or -1
         priority = priority + 1
-        group = RoleGroup(guild_id=guild.id,
-                          priority=priority,
-                          name=name,
-                          color=color,
-                          exclusive_roles=exclusive_roles,
-                          description=description)
+        group = RoleGroup(
+            guild_id=guild.id,
+            priority=priority,
+            name=name,
+            color=color,
+            exclusive_roles=exclusive_roles,
+            description=description,
+        )
         logger.db(f"Adding group {group.display_name}")
         await group.insert()
         return group
 
     # status: done, not tested
     @staticmethod
-    async def role_group_autocomplete(ctx: AutocompleteContext, group: str, additional_options: List[str] = None,
-                                      hide_empty: bool = False):
+    async def role_group_autocomplete(
+        ctx: AutocompleteContext,
+        group: str,
+        additional_options: List[str] = None,
+        hide_empty: bool = False,
+    ):
         """Autocompletes role groups request with optional additional options"""
         groups = await RoleGroup.find(RoleGroup.guild_id == ctx.guild_id).to_list()
         if hide_empty:
@@ -840,44 +892,59 @@ class RoleSelector(Scale):
 
     # status: done, tested
     @staticmethod
-    async def try_assign_role(requester: dis_snek.Member, target: dis_snek.Member, role: dis_snek.Role,
-                              reason: Absent[str] = MISSING):
+    async def try_assign_role(
+        requester: dis_snek.Member,
+        target: dis_snek.Member,
+        role: dis_snek.Role,
+        reason: Absent[str] = MISSING,
+    ):
         """Tries to assign a role to a target. Returns list of unassigned roles as a result or raises utils.BadBotArgument"""
         db_role = await BotRole.find_one(BotRole.role_id == role.id)
         if not db_role:
             raise utils.BadBotArgument(
-                f"Trying to assign role {role.mention}, that is not in the database! Probably you shouldn't do it")
+                f"Trying to assign role {role.mention}, that is not in the database! Probably you shouldn't do it"
+            )
 
         if requester != target or not db_role.assignable:
-            if not await utils.can_manage_role(requester, role):
+            if not await can_manage_role(requester, role):
                 raise utils.BadBotArgument("Trying to assign role without a permissions to do it!")
 
         # remove conflicting roles
         group = await db_role.group.fetch()
         if group.exclusive_roles:
             target_roles = {target_role.id: target_role for target_role in target.roles}
-            db_roles = BotRole.find(BotRole.group_request(group), In(BotRole.role_id, list(target_roles.keys())))
+            db_roles = BotRole.find(
+                BotRole.group_request(group),
+                In(BotRole.role_id, list(target_roles.keys())),
+            )
             async for db_role in db_roles:
                 role_to_remove = target_roles[db_role.role_id]
                 logger.important(f"Removing role {role_to_remove} from {target} since it conflicts with {role}")
-                await target.remove_role(role_to_remove,
-                                         reason=f"Removing a conflicting role from group {group.display_name} "
-                                                f"when assigning '{role.name}' by {requester.display_name}")
+                await target.remove_role(
+                    role_to_remove,
+                    reason=f"Removing a conflicting role from group {group.display_name} "
+                    f"when assigning '{role.name}' by {requester.display_name}",
+                )
 
         logger.important(f"Adding role {role} to {target} by {requester} request")
         await target.add_role(role, reason=reason)
 
     # Status: done, tested
     @staticmethod
-    async def try_remove_role(requester: dis_snek.Member, target: dis_snek.Member, role: dis_snek.Role,
-                              reason: Absent[str] = MISSING):
+    async def try_remove_role(
+        requester: dis_snek.Member,
+        target: dis_snek.Member,
+        role: dis_snek.Role,
+        reason: Absent[str] = MISSING,
+    ):
         db_role = await BotRole.find_one(BotRole.role_id == role.id)
         if not db_role:
             raise utils.BadBotArgument(
-                f"Trying to remove role {role.mention}, that is not in the database! Probably you shouldn't do it")
+                f"Trying to remove role {role.mention}, that is not in the database! Probably you shouldn't do it"
+            )
 
         if requester != target or not db_role.assignable:
-            if not await utils.can_manage_role(requester, role):
+            if not await can_manage_role(requester, role):
                 raise utils.BadBotArgument("Trying to unassign role without a permissions to do it!")
 
         logger.important(f"Removing role {role} from {target} by {requester} request")
@@ -886,11 +953,11 @@ class RoleSelector(Scale):
     # Status: done, not tested
     @classmethod
     async def try_remove_group(
-            cls,
-            requester: dis_snek.Member,
-            target: dis_snek.Member,
-            group: RoleGroup,
-            reason: Absent[str] = MISSING
+        cls,
+        requester: dis_snek.Member,
+        target: dis_snek.Member,
+        group: RoleGroup,
+        reason: Absent[str] = MISSING,
     ) -> list[dis_snek.Role]:
         """Removes all roles from this group from the target"""
         removed = []
@@ -938,8 +1005,9 @@ class RoleSelector(Scale):
     # status: done, not tested
     @staticmethod
     async def ensure_group_priority_free(guild: dis_snek.Guild, priority: int):
-        num_of_groups_with_priority = await RoleGroup.find(RoleGroup.guild_id == guild.id,
-                                                           RoleGroup.priority == priority).count()
+        num_of_groups_with_priority = await RoleGroup.find(
+            RoleGroup.guild_id == guild.id, RoleGroup.priority == priority
+        ).count()
         if num_of_groups_with_priority > 0:
             logger.db(f"Found groups with priority {priority}, removing them from this priority")
 
@@ -947,8 +1015,9 @@ class RoleSelector(Scale):
             logger.db(f"Adding {num_of_groups_with_priority} to the priority of groups highter than {priority}")
             await following_groups.inc({RoleGroup.priority: num_of_groups_with_priority})
             # change during iteration
-            groups_to_change = await RoleGroup.find(RoleGroup.guild_id == guild.id,
-                                                    RoleGroup.priority == priority).to_list()
+            groups_to_change = await RoleGroup.find(
+                RoleGroup.guild_id == guild.id, RoleGroup.priority == priority
+            ).to_list()
             for index, group in enumerate(groups_to_change):
                 new_priority = priority + index + 1
                 logger.db(f"Updating group {group.display_name} priority: {group.priority} -> {new_priority}")
@@ -957,7 +1026,9 @@ class RoleSelector(Scale):
 
     # status: done, tested
     @staticmethod
-    async def check_role_for_tracking(role: dis_snek.Role) -> Tuple[bool, Optional[str]]:
+    async def check_role_for_tracking(
+        role: dis_snek.Role,
+    ) -> Tuple[bool, Optional[str]]:
         if not role:
             return False, f"Invalid role {role}"
 
@@ -965,7 +1036,7 @@ class RoleSelector(Scale):
             logger.info(f"Skipping role '{role}' as it's system role")
             return False, f"Role {role.mention} is a system role and won't be managed"
 
-        if not await utils.can_manage_role(role.guild.me, role):
+        if not await can_manage_role(role.guild.me, role):
             logger.info(f"Skipping role '{role}' as bot cannot manage it")
             return False, f"Bot cannot manage role {role.mention}"
 
@@ -993,8 +1064,15 @@ class RoleSelector(Scale):
     async def create_selector_components_for_group(self, group: RoleGroup) -> list[list[dis_snek.BaseComponent]]:
 
         db_roles: List[BotRole] = await BotRole.find(BotRole.group_request(group), BotRole.assignable == True).to_list()
-        options = [SelectOption(label=role.name, value=str(role.id), description=role.description, emoji=role.emoji) for
-                   role in db_roles]
+        options = [
+            SelectOption(
+                label=role.name,
+                value=str(role.id),
+                description=role.description,
+                emoji=role.emoji,
+            )
+            for role in db_roles
+        ]
 
         if not options:
             raise utils.BadBotArgument(f"No assignable roles available in the group {group.name}")
@@ -1002,7 +1080,8 @@ class RoleSelector(Scale):
         if len(options) > self.bot.config.max_roles_in_group:
             raise utils.BadBotArgument(
                 f"Select component can display only up to {self.bot.config.max_roles_in_group} roles! "
-                f"Please try with smaller group size")
+                f"Please try with smaller group size"
+            )
         select = Select(
             options=options,
             min_values=0,
@@ -1012,7 +1091,7 @@ class RoleSelector(Scale):
         clear_roles_button = Button(
             style=dis_snek.ButtonStyles.PRIMARY,
             label="Remove role" if group.exclusive_roles else "Remove roles",
-            custom_id="static_role_clear_roles"
+            custom_id="static_role_clear_roles",
         )
 
         components = [[select], [clear_roles_button]]
@@ -1022,12 +1101,40 @@ class RoleSelector(Scale):
         async for selector in RoleSelectorMessage.find(RoleSelectorMessage.group_request(group)):
             selector: RoleSelectorMessage
             message = await self.bot.cache.fetch_message(selector.channel_id, selector.message_id)
-            logger.important(f"Marking selector message in {message.channel}.{message.guild} for group {group.display_name} as deleted")
-            await message.edit(embed=dis_snek.Embed(
-                title=group.display_name,
-                description="Group was deleted, selector is no more",
-                color=utils.ResponseStatusColors.ERROR.value
-            ))
+            logger.important(
+                f"Marking selector message in {message.channel}.{message.guild} for group {group.display_name} as deleted"
+            )
+            await message.edit(
+                embed=dis_snek.Embed(
+                    title=group.display_name,
+                    description="Group was deleted, selector is no more",
+                    color=utils.ResponseStatusColors.ERROR.value,
+                )
+            )
+
+    async def get_roles_list_fields(self, group: RoleGroup, guild: Guild, only_assignable: bool = True) -> list[EmbedField]:
+        fields = []
+        db_roles = BotRole.find(BotRole.group_request(group))
+        if only_assignable:
+            db_roles.find(BotRole.assignable == True)
+        db_role: BotRole
+
+        mentions = []
+        async for db_role in db_roles:
+            if role := await guild.fetch_role(db_role.role_id):
+                emoji = db_role.emoji or self.bot.get_emoji(utils.SystemEmojis.BLANK)
+                mentions.append(f"{emoji}{role.mention}")
+
+        if mentions:
+            n = 9  # 9 role mentions max in one embed field
+            mentions_regrouped = [mentions[i: i + n] for i in range(0, len(mentions), n)]
+            for i, mentions_group in enumerate(mentions_regrouped, 1):
+                group_len = len(mentions_regrouped)
+                name = group.display_name if group_len == 1 else f"{group.display_name} [{i}/{group_len}]"
+                field = EmbedField(name=name, value="\n".join(mentions_group), inline=True)
+                fields.append(field)
+
+        return fields
 
 
 def setup(bot):

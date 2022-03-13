@@ -1,20 +1,17 @@
 import asyncio
+import inspect
 import logging
 import os
-from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
-import inspect
 
 import dis_snek.api.events
-from motor import motor_asyncio
-
-from dis_snek import AllowedMentions, logger_name, listen, errors
-from dis_snek import Snake, InteractionContext
-from dis_snek.models import Intents
-
 from beanie import init_beanie
+from dis_snek import AllowedMentions, InteractionContext, Snake, errors, listen, logger_name
+from dis_snek.models import Intents
+from motor import motor_asyncio
 
 import utils.log as log_utils
 from config import load_settings
@@ -35,8 +32,9 @@ class Bot(Snake):
             sync_interactions=True,
             # delete_unused_application_cmds=True,
             asyncio_debug=self.config.debug,
-            activity="with sneks",
-            debug_scope=self.config.debug_scope,
+            activity="with fractals",  # todo config
+            debug_scope=self.config.debug_scope or dis_snek.MISSING,
+            default_prefix=["!", dis_snek.MENTION_PREFIX],
         )
 
         self.db: Optional[motor_asyncio.AsyncIOMotorClient] = None
@@ -51,7 +49,7 @@ class Bot(Snake):
 
         return current | files
 
-    def startup(self, bot_token, db_token):
+    async def startup(self):
         for extension in self.get_extensions():
             try:
                 self.load_extension(extension)
@@ -61,9 +59,9 @@ class Bot(Snake):
         if self.config.debug:
             self.grow_scale("dis_snek.ext.debug_scale")
 
-        self.db = motor_asyncio.AsyncIOMotorClient(db_token)
-        self.loop.run_until_complete(init_beanie(database=self.db.db_name, document_models=self.models))
-        self.start(bot_token)
+        self.db = motor_asyncio.AsyncIOMotorClient(self.config.database_address)
+        await init_beanie(database=self.db.db_name, document_models=self.models)
+        await self.astart(self.config.discord_token)
 
     @listen()
     async def on_ready(self):
@@ -73,7 +71,7 @@ class Bot(Snake):
 
         logger.info("Pre-loading system custom emojis!")
         for emoji in utils.SystemEmojis:
-            home_guild = self.get_guild(self.debug_scope)
+            home_guild = self.get_guild(self.config.emoji_guild)
             self.emojis[emoji] = await home_guild.fetch_custom_emoji(emoji.value)
         logger.info(f"Pre-loaded {len(self.emojis)} system custom emojis!")
 
@@ -85,8 +83,10 @@ class Bot(Snake):
         unexpected = True
         if isinstance(error, errors.CommandCheckFailure):
             unexpected = False
-            await send_error(ctx, "Command check failed!\n"
-                                  "Sorry, but it looks like you don't have permission to use this command!")
+            await send_error(
+                ctx,
+                "Command check failed!\n" "Sorry, but it looks like you don't have permission to use this command!",
+            )
         else:
             await send_error(ctx, str(error)[:2000] or "<No exception text available>")
 
@@ -138,8 +138,7 @@ def main():
         logger.addHandler(handler)
 
     bot = Bot(current_dir, config)
-
-    bot.startup(config.discord_token, config.database_address)
+    asyncio.run(bot.startup())
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
-import dis_snek
-from dis_snek import Scale, Modal, ShortText, ParagraphText, InteractionContext, subcommand, slash_str_option, check
-
 import logging
 from typing import TYPE_CHECKING
+
+import dis_snek
+from dis_snek import InteractionContext, Modal, ParagraphText, Scale, ShortText, check, slash_str_option, subcommand
+
 import utils.misc as utils
 from scales.permissions import Permissions
 
@@ -17,10 +18,11 @@ class MiscScale(Scale):
 
     @check(Permissions.check_manager)
     @subcommand(base="say", name="as_bot")
-    async def echo(self,
-                   ctx: InteractionContext,
-                   message: slash_str_option(description="Message content to send") = None
-                   ):
+    async def echo(
+        self,
+        ctx: InteractionContext,
+        message: slash_str_option(description="Message content to send") = None,
+    ):
         """Sends message from account of this"""
         if message is None:
             modal = Modal(
@@ -32,7 +34,7 @@ class MiscScale(Scale):
                         placeholder="Message text to send",
                         required=True,
                     )
-                ]
+                ],
             )
             await ctx.send_modal(modal)
             # Replacing context with modal context here
@@ -53,12 +55,13 @@ class MiscScale(Scale):
 
     @check(Permissions.check_manager)
     @subcommand(base="say", name="as_anything")
-    async def webhook_say(self,
-                          ctx: InteractionContext,
-                          message: slash_str_option(description="Message content to send") = None,
-                          username: slash_str_option(description="Username for sending fake message") = None,
-                          avatar_url: slash_str_option(description="Avatar URL for sending fake message") = None,
-                          ):
+    async def webhook_say(
+        self,
+        ctx: InteractionContext,
+        message: slash_str_option(description="Message content to send") = None,
+        username: slash_str_option(description="Username for sending fake message") = None,
+        avatar_url: slash_str_option(description="Avatar URL for sending fake message") = None,
+    ):
         """Sends message from "fake" user with specified avatar and username"""
         if message is None:
             modal = Modal(
@@ -83,8 +86,8 @@ class MiscScale(Scale):
                         custom_id="content",
                         placeholder="Fake message text to send",
                         required=True,
-                    )
-                ]
+                    ),
+                ],
             )
             await ctx.send_modal(modal)
             # Replacing context with modal context here

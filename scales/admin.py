@@ -1,13 +1,12 @@
+import logging
+from typing import TYPE_CHECKING
+
 import dis_snek
-from dis_snek import Scale, InteractionContext, AutocompleteContext
-from dis_snek import subcommand, slash_str_option, check
 from beanie import init_beanie
+from dis_snek import AutocompleteContext, InteractionContext, Scale, check, slash_str_option, subcommand
 
 from scales.permissions import Permissions
 from utils.fuzz import fuzzy_autocomplete, fuzzy_find
-import logging
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from main import Bot
@@ -20,9 +19,11 @@ class Admin(Scale):
 
     @check(Permissions.check_admin)
     @subcommand("bot", name="reload")
-    async def reload(self, ctx: InteractionContext,
-                     extension: slash_str_option(description="Extension to reload", required=False, autocomplete=True) = None,
-                     ):
+    async def reload(
+        self,
+        ctx: InteractionContext,
+        extension: slash_str_option(description="Extension to reload", required=False, autocomplete=True) = None,
+    ):
         await ctx.defer(ephemeral=True)
         if extension:
             extensions = [extension]
@@ -69,8 +70,9 @@ class Admin(Scale):
 
     @subcommand("bot", name="test")
     async def test(self, ctx: InteractionContext, test: slash_str_option("123")):
-        from utils.modals import generate_modal
         from scales.roles import RoleGroup
+        from utils.modals import generate_modal
+
         model = await RoleGroup.find_one(RoleGroup.name == "Managed")
         result = await generate_modal(ctx, RoleGroup)
         print(result)

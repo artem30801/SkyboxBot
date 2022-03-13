@@ -1,12 +1,12 @@
-import dis_snek
-from dis_snek import Scale, InteractionContext, subcommand, slash_str_option, slash_int_option
+import itertools
+from datetime import datetime
+from typing import Optional
 
-from utils.db import Document
+import dis_snek
+from dis_snek import InteractionContext, Scale, slash_int_option, slash_str_option, subcommand
 from pydantic import BaseModel, Field
 
-import itertools
-from typing import Optional
-from datetime import datetime
+from utils.db import Document
 
 
 class PollOption(BaseModel):
@@ -44,11 +44,12 @@ class Poll(Document):
 
 class Polls(Scale):
     @subcommand(base="poll", name="create")
-    async def poll_create(self,
-                          ctx: InteractionContext,
-                          name: slash_str_option(description="Name of the poll", required=True),
-                          color: slash_str_option(description="Color of the voting embed")
-                          ):
+    async def poll_create(
+        self,
+        ctx: InteractionContext,
+        name: slash_str_option(description="Name of the poll", required=True),
+        color: slash_str_option(description="Color of the voting embed"),
+    ):
         pass
 
 

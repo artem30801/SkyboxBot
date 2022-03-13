@@ -1,4 +1,4 @@
-from rapidfuzz import process, fuzz
+from rapidfuzz import fuzz, process
 
 
 # TODO maybe this needs to be async as heavy fuzzy matching may freeze up event loop
