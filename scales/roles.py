@@ -2,7 +2,7 @@ import logging
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import dis_snek
-from beanie import Indexed, Link
+from beanie import Indexed, Link, ValidateOnSave, before_event
 from beanie.operators import In, Set
 from bson.objectid import ObjectId
 from dis_snek import (
@@ -32,14 +32,15 @@ from dis_snek import (
     subcommand,
     tasks,
 )
-from pydantic import Field
+from pydantic import Field, validator, ValidationError
+from pydantic.color import Color
 
 # from pydantic import BaseModel
-import scales.permissions
 import utils.log as log_utils
 import utils.misc as utils
+import utils.modals as modals
+import utils.db as db
 from scales.permissions import Permissions, can_manage_role
-from utils import modals as modal_utils
 from utils.db import Document
 from utils.fuzz import fuzzy_autocomplete, fuzzy_find
 from utils.misc import ResponseStatusColors, send_with_embed
@@ -53,33 +54,49 @@ logger: log_utils.BotLogger = logging.getLogger(__name__)  # type: ignore
 class RoleGroup(Document):
     guild_id: Indexed(int) = Field(editable=False)
     name: Indexed(str)
-    priority: int = Field(gt=-1)
-    color: Optional[str] = None
+    priority: int = Field(ge=0)
+    color: Optional[Color] = None
     exclusive_roles: bool = False
     description: str = ""
 
-    def __init__(self, *, name, **kwargs):
-        name = utils.convert_to_db_name(name)
-        super(RoleGroup, self).__init__(name=name, **kwargs)
+    validate_name = validator("name", allow_reuse=True)(db.validate_name)
+
+    @before_event(ValidateOnSave)
+    async def validate_db(self):
+        # validate name
+        print("VALIDATION", self.name, self)
+        cls = self.__class__
+        if await cls.find_one(cls.name == self.name, cls.guild_id == self.guild_id, cls.id != self.id):
+            raise utils.BadBotArgument(f"Role group with name '{self.name}' already exists on this server!")
+
+        # ensure priority
+        await db.ensure_priority(cls.find(cls.guild_id == self.guild_id), self.priority)
 
     @property
     def display_name(self):
-        return utils.convert_to_display_name(self.name)
+        return db.to_display_name(self.name)
 
-    # status: done, tested
-    @staticmethod
-    async def validate_name(group_name: str, guild: dis_snek.Guild):
-        if await RoleGroup.find_one(RoleGroup.name == group_name, RoleGroup.guild_id == guild.id):
-            raise utils.BadBotArgument(f"Role group with name '{group_name}' already exists on this server!")
+    @property
+    def id_request(self):
+        return {"group.$id": self.id}
 
 
 class BotRole(Document):
-    role_id: Indexed(int)
-    name: str  # Just to make it easier to look at raw DB data
+    role_id: Indexed(int) = Field(editable=False)
+    name: str = Field(editable=False)  # Just to make it easier to look at raw DB data
     group: Link[RoleGroup]
     assignable: bool = False
     description: str = ""
+    # TODO: add validator for emoji with pydantic https://discord.com/channels/570257083040137237/570257083564294197/952670927068491776
     emoji: Optional[str] = None
+
+    @validator("emoji")
+    def validate_emoji(cls, value):
+        if value is None:
+            return value
+        if not utils.is_emoji(value):
+            raise ValidationError(f"{value} is not a valid emoji")
+        return value
 
     @staticmethod
     def group_request(group: RoleGroup):
@@ -94,6 +111,7 @@ class RoleSelectorMessage(Document):
     message_id: Indexed(int)
     channel_id: int
     group: Link[RoleGroup]
+    location: str  # Guild and channel, just to make it easier to look at raw DB data
 
     @staticmethod
     def group_request(group: RoleGroup):
@@ -118,6 +136,16 @@ class RoleSelector(Scale):
         sync_task.start()
         await sync_task()
 
+    @dis_snek.listen()
+    async def on_message_delete(self, event: dis_snek.events.MessageDelete):
+        deleted_message = event.message
+        selector = await RoleSelectorMessage.find_one(RoleSelectorMessage.message_id == int(deleted_message.id), fetch_links=True)
+        if selector:
+            logger.db(f"Removing selector for group {selector.group.display_name} from database on message deletion"
+                      f" in #{deleted_message.channel.name} in {deleted_message.guild.name}")
+            await selector.delete()
+
+    # TODO: Help button?
     # status: done, tested
     @check(Permissions.check_manager)
     @subcommand(
@@ -133,14 +161,14 @@ class RoleSelector(Scale):
     ):
         await ctx.defer()
         group = await self.role_group_find(group, ctx.guild, use_fuzzy_search=False)
-        components = await self.create_selector_components_for_group(group)
-        embed = await self.create_selector_embed_for_group(group=group, guild=ctx.guild)
+        send_params = await self.create_selector_send_params(group=group, guild=ctx.guild)
 
-        message = await ctx.send(embed=embed, components=components)
+        message = await ctx.send(**send_params)
         message_tracker = RoleSelectorMessage(
             message_id=message.id,
             channel_id=message.channel.id,
             group=group,
+            location=f"#{message.channel.name} at {message.guild.name}"
         )
         await message_tracker.insert()
         logger.command(ctx, f"Created a selector for group {group.display_name} in {ctx.channel}")
@@ -448,7 +476,7 @@ class RoleSelector(Scale):
 
         group_name = group.display_name if group else self.bot.config.default_manage_group
 
-        embed = dis_snek.Embed(title="Tracking roles")
+        embed = utils.get_default_embed(ctx.guild, title="Tracking roles", status=ResponseStatusColors.SUCCESS)
         embed.add_field(name="Group", value=group_name)
         embed.add_field(name="Added", value=f"{len(new_roles)} roles")
         # - 1 for automatic skip to exclude @everyone????? desman, plz check
@@ -475,7 +503,7 @@ class RoleSelector(Scale):
         """Stops bot from managing the role"""
         await ctx.defer(ephemeral=True)
         try:
-            await self.stop_role_tracking(role.id)
+            await self.stop_role_tracking(role.id, guild=ctx.guild)
         except utils.BadBotArgument:
             await send_with_embed(
                 ctx,
@@ -581,9 +609,9 @@ class RoleSelector(Scale):
                 logger.db(f"Changing {name}: '{before}' → '{after}'")
 
             await db_role.save()
+            await self.on_group_roles_change(group=db_role.group, guild=ctx.guild)
             if old_group is not None:
-                await self.on_group_roles_change(old_group)
-                await self.on_group_roles_change(group)
+                await self.on_group_roles_change(group=old_group, guild=ctx.guild)  # type: ignore
 
             await ctx.send(embed=embed)
         else:
@@ -612,8 +640,7 @@ class RoleSelector(Scale):
     ):
         """Adds a role group with selected name and description"""
         await ctx.defer(ephemeral=True)
-        if color:
-            utils.validate_color(color)
+
         group = await self.create_new_role_group(
             guild=ctx.guild,
             name=name,
@@ -658,7 +685,7 @@ class RoleSelector(Scale):
             # await group_roles.update(Set({BotManagedRole.group: transfer_group}))  # TODO wait for odmantic fix
             logger.db(f"Moving roles from {group.display_name} to {transfer_group.display_name} on group deletion")
             await group_roles.update(Set(BotRole.group_request(transfer_group)))
-            await self.on_group_roles_change(transfer_group)
+            await self.on_group_roles_change(group=transfer_group, guild=ctx.guild)
         else:
             logger.db(f"Deleting roles from {group.display_name} on group deletion")
             await group_roles.delete()
@@ -703,36 +730,24 @@ class RoleSelector(Scale):
         group = await self.role_group_find(group_name=group, guild=ctx.guild, use_fuzzy_search=False)
         old_name = group.display_name
 
-        if priority and priority != group.priority:
-            logger.db(f"Updating group {group.display_name} priority: '{group.priority}' -> '{priority}'")
-            await self.ensure_group_priority_free(ctx.guild, priority)
-            group.priority = priority
-        if name:
-            name = utils.convert_to_db_name(name)
-            if name != group.name:
-                await RoleGroup.validate_name(group_name=name, guild=ctx.guild)
-                logger.db(f"Updating group {group.display_name} name: '{group.name}' -> '{name}'")
-                group.name = name
-        if color and color != group.color:
-            utils.validate_color(color)
-            logger.db(f"Updating group {group.display_name} color: '{group.color}' -> '{color}'")
-            group.color = color
-        if exclusive_roles and exclusive_roles != group.exclusive_roles:
-            logger.db(
-                f"Updating group {group.display_name} exclusivity: '{group.exclusive_roles}' -> '{exclusive_roles}'"
-            )
-            group.exclusive_roles = exclusive_roles
-        if description:
-            if description.lower() == "none":
-                description = ""
-            if description != group.description:
-                logger.db(f"Updating group {group.display_name} description: '{group.description}' -> '{description}'")
-                group.description = description
+        updated = dict(priority=priority,
+                       name=name, color=color,
+                       exclusive_roles=exclusive_roles,
+                       description=description,
+                       )
 
-        logger.db(f"Updating role group {group.display_name}")
-        await group.save()
+        for key, value in updated.items():
+            if value is None:
+                continue
+            # if isinstance(value, str) and value.lower() == "none":
+            #     value =
+            setattr(group, key, value)
+
+        # if description.lower() == "none":
+        #     description = ""
+
         await send_with_embed(ctx, f"Group {old_name} was successfully updated")
-        await self.on_group_roles_change(group)
+        await self.on_group_roles_change(group=group, guild=ctx.guild)
 
     # Status: done, tested
     @group_edit.autocomplete("group")
@@ -744,11 +759,30 @@ class RoleSelector(Scale):
     async def _group_edit_color(self, ctx: AutocompleteContext, color: str, **kwargs):
         return await utils.color_autocomplete(ctx, color)
 
-    # Status: not done
-    # TODO DO IT WITH MODAL
-    @subcommand(base="role", subcommand_group="group", name="edit_roles", description="11")
-    async def group_edit_roles(self, ctx: InteractionContext):
-        pass
+    # Status: TODO
+    @subcommand(base="manage", subcommand_group="group", name="edit_roles")
+    async def group_edit_roles(
+            self,
+            ctx: InteractionContext,
+            group: slash_str_option("Group to edit roles", autocomplete=True, required=True),
+    ):
+        """Updates all roles in the group with set parameters"""
+        # await ctx.defer(ephemeral=True)
+
+        group = await self.role_group_find(group_name=group, guild=ctx.guild, use_fuzzy_search=False)
+        roles = await BotRole.find(BotRole.group_request(group)).to_list()
+        result = await modals.generate_modal(
+            ctx=ctx,
+            model=BotRole,
+            title="Edit fields you want to change",
+            edit_instance=roles,
+        )
+        await ctx.send(content=str(result))
+
+    # Status: done, tested
+    @group_edit_roles.autocomplete("group")
+    async def _group_edit_roles_group(self, ctx: AutocompleteContext, group: str, **kwargs):
+        return await self.role_group_autocomplete(ctx, group)
 
     # status: done, tested
     async def track_role(
@@ -800,16 +834,16 @@ class RoleSelector(Scale):
         )
         logger.db(f"Adding tracked role {db_role.name} in group {group.display_name}")
         await db_role.insert()
-        await self.on_group_roles_change(group)
+        await self.on_group_roles_change(group=group, guild=ctx.guild)
 
     # status: done, tested
-    async def stop_role_tracking(self, role_id: int):
+    async def stop_role_tracking(self, role_id: int, guild: Guild):
         """Removes role from internal database by ID"""
         db_role = await BotRole.find_one(BotRole.role_id == role_id, fetch_links=True)
         if db_role:
             logger.db(f"Removing tracked role {db_role.name}")
             await db_role.delete()
-            await self.on_group_roles_change(db_role.group)
+            await self.on_group_roles_change(group=db_role.group, guild=guild)  # type: ignore
         else:
             raise utils.BadBotArgument(f"Role with ID {role_id} is not managed by bot")
 
@@ -823,8 +857,6 @@ class RoleSelector(Scale):
         description: str = "",
     ):
         """Creates a new role group for the guild, checks for collisions"""
-        name = utils.convert_to_db_name(name)
-        await RoleGroup.validate_name(group_name=name, guild=guild)
 
         priority = await RoleGroup.find(RoleGroup.guild_id == guild.id).max("priority") or -1
         priority = priority + 1
@@ -872,7 +904,7 @@ class RoleSelector(Scale):
         Method to get RoleGroup object from data received from group slash options.
         Raises utils.BadBotArgument if fails to find it
         """
-        group_name = utils.convert_to_db_name(group_name)
+        group_name = db.to_db_name(group_name)
 
         # try and get role group with exact same name
         group = await RoleGroup.find_one(RoleGroup.name == group_name, RoleGroup.guild_id == guild.id)
@@ -997,32 +1029,10 @@ class RoleSelector(Scale):
 
         for group_id in groups_to_update:
             group = await RoleGroup.find_one(RoleGroup.id == group_id)
-            await self.on_group_roles_change(group)
+            await self.on_group_roles_change(group=group, guild=guild)
 
         logger.info(f"Performed roles sync, {len(deleted)} deleted, {len(renamed)} renamed")
         return deleted, renamed
-
-    # status: done, not tested
-    @staticmethod
-    async def ensure_group_priority_free(guild: dis_snek.Guild, priority: int):
-        num_of_groups_with_priority = await RoleGroup.find(
-            RoleGroup.guild_id == guild.id, RoleGroup.priority == priority
-        ).count()
-        if num_of_groups_with_priority > 0:
-            logger.db(f"Found groups with priority {priority}, removing them from this priority")
-
-            following_groups = RoleGroup.find(RoleGroup.guild_id == guild.id, RoleGroup.priority > priority)
-            logger.db(f"Adding {num_of_groups_with_priority} to the priority of groups highter than {priority}")
-            await following_groups.inc({RoleGroup.priority: num_of_groups_with_priority})
-            # change during iteration
-            groups_to_change = await RoleGroup.find(
-                RoleGroup.guild_id == guild.id, RoleGroup.priority == priority
-            ).to_list()
-            for index, group in enumerate(groups_to_change):
-                new_priority = priority + index + 1
-                logger.db(f"Updating group {group.display_name} priority: {group.priority} -> {new_priority}")
-                group.priority = new_priority
-                await group.save()
 
     # status: done, tested
     @staticmethod
@@ -1047,7 +1057,7 @@ class RoleSelector(Scale):
         return True, None
 
     # status: done, not tested
-    async def on_group_roles_change(self, group: RoleGroup):
+    async def on_group_roles_change(self, group: RoleGroup, guild: Guild):
         async for selector in RoleSelectorMessage.find(RoleSelectorMessage.group_request(group)):
             selector: RoleSelectorMessage
             try:
@@ -1055,14 +1065,21 @@ class RoleSelector(Scale):
                 logger.important(
                     f"Updating selector message in {message.channel}.{message.guild} on group {group.display_name} update"
                 )
-                await message.edit(components=await self.create_selector_components_for_group(group))
+                send_params = await self.create_selector_send_params(group=group, guild=guild)
+                await message.edit(**send_params)
             except dis_snek.errors.SnakeException as e:
                 logger.warning(f"Exception during selector update:", exc_info=e)
                 continue
 
     # status: done, not tested
-    async def create_selector_components_for_group(self, group: RoleGroup) -> list[list[dis_snek.BaseComponent]]:
+    async def create_selector_send_params(self, group: RoleGroup, guild: Guild) -> dict:
+        # Creating embed with roles list
+        embed_title = "Select one role from the list below!" if group.exclusive_roles else "Select roles from the list below!"
+        embed_fields = await self.get_roles_list_fields(group=group, guild=guild, only_assignable=True)
+        embed_color = group.color or ResponseStatusColors.INFO.value
+        embed = dis_snek.Embed(title=embed_title, color=embed_color, fields=embed_fields)
 
+        # Creating selector and buttons components
         db_roles: List[BotRole] = await BotRole.find(BotRole.group_request(group), BotRole.assignable == True).to_list()
         options = [
             SelectOption(
@@ -1095,14 +1112,20 @@ class RoleSelector(Scale):
         )
 
         components = [[select], [clear_roles_button]]
-        return components
 
+        return {
+            "embed": embed,
+            "components": components,
+        }
+
+    # status: done, not tested
     async def mark_selectors_deleted(self, group):
-        async for selector in RoleSelectorMessage.find(RoleSelectorMessage.group_request(group)):
+        group_selectors = await RoleSelectorMessage.find(RoleSelectorMessage.group_request(group)).to_list()
+        for selector in group_selectors:
             selector: RoleSelectorMessage
             message = await self.bot.cache.fetch_message(selector.channel_id, selector.message_id)
             logger.important(
-                f"Marking selector message in {message.channel}.{message.guild} for group {group.display_name} as deleted"
+                f"Marking selector message in {selector.location} for group {group.display_name} as deleted and removing it from database"
             )
             await message.edit(
                 embed=dis_snek.Embed(
@@ -1111,6 +1134,7 @@ class RoleSelector(Scale):
                     color=utils.ResponseStatusColors.ERROR.value,
                 )
             )
+            await selector.delete()
 
     async def get_roles_list_fields(self, group: RoleGroup, guild: Guild, only_assignable: bool = True) -> list[EmbedField]:
         fields = []

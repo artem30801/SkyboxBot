@@ -79,14 +79,6 @@ class SystemEmojis(enum.IntEnum):
     BLANK = 850426538792321065
 
 
-def convert_to_db_name(name: str) -> str:
-    return name.replace(" ", "_")
-
-
-def convert_to_display_name(db_name: str) -> str:
-    return db_name.replace("_", " ")
-
-
 def is_hex(hex_string: str) -> bool:
     """Checks, if passed string is a valid hex string"""
     return bool(re.fullmatch(r"#?([a-fA-F0-9]{3})|#?([a-fA-F0-9]{6})", hex_string))
@@ -131,9 +123,3 @@ async def color_autocomplete(ctx: AutocompleteContext, color: str):
         results = [dict(name=f"{name} | {hex_color}", value=hex_color) for name, _, hex_color in results]
 
     await ctx.send(results)
-
-
-def validate_color(color: str):
-    """Removes color description from the incorrect client autocomplete logic and checks, if the color is valid"""
-    if not is_hex(color):
-        raise BadBotArgument(f"'{color}' is not a hex color! Put hex color or use auto-complete results")

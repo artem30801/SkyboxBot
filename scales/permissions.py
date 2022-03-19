@@ -5,10 +5,12 @@ from dis_snek import subcommand, check, is_owner, slash_str_option, slash_user_o
 from beanie import Indexed
 from utils.db import Document
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Union, TYPE_CHECKING
 
 from utils import misc as utils
 from utils.misc import send_with_embed, ResponseStatusColors
+from utils.fuzz import fuzzy_autocomplete
+
 
 if TYPE_CHECKING:
     from main import Bot
@@ -93,8 +95,16 @@ class Permissions(Scale):
         )
 
     @admin_revoke.autocomplete("user_id")
-    async def _admin_revoke_user_id(self, ctx: AutocompleteContext, user_):
-        pass
+    async def _admin_revoke_user_id(self, ctx: AutocompleteContext, user_id, **kwargs):
+        db_admins = await BotAdmins.all().to_list()
+        admins = [await self.fetch_user(ctx, admin.user_id) for admin in db_admins]
+        admin_tags = [user.tag for user in admins if user is not None]
+        admin_ids = [str(admin.user_id) for admin in db_admins]
+
+        # fuzzy_autocomplete()
+
+        choices = [f"{user.id}: {user.tag}" for user in admins]
+        await ctx.send()
 
     @subcommand(base="permissions", subcommand_group="admin", name="check")
     async def admin_check_cmd(
@@ -262,7 +272,7 @@ class Permissions(Scale):
         except ValueError:
             raise utils.BadBotArgument("'member' or 'user_id' should be provided!")
 
-    async def fetch_user_mention(self, ctx, user_id):
+    async def fetch_user(self, ctx, user_id) -> Optional[Union[dis_snek.User, dis_snek.Member]]:
         user = None
         if ctx.guild:
             user = await self.bot.fetch_member(user_id, ctx.guild)
@@ -271,6 +281,11 @@ class Permissions(Scale):
             user = await self.bot.fetch_user(user_id)
         else:
             user = user.user  # obj is found
+
+        return user
+
+    async def fetch_user_mention(self, ctx, user_id):
+        user = await self.fetch_user(ctx, user_id)
 
         if user is None:
             mention = f"`{user_id}`: (User not found)"

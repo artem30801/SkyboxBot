@@ -1,10 +1,11 @@
 import asyncio
-from typing import Any, Callable, Optional, Type
+from typing import Any, Callable, Optional, Type, Union
 
 import attr
 import dis_snek
 from dis_snek import Context, Modal, ParagraphText, ShortText
 from pydantic.fields import ModelField
+from beanie import Link
 
 from utils import misc as utils
 from utils.db import Document
@@ -19,13 +20,31 @@ class ModalField:
     placeholder: Optional[str] = attr.field(default=None)
 
 
+MIXED_VALUES = "<MIXED VALUES>"
+
+
+async def get_field_value(obj, field):
+    value = getattr(obj, field)
+    if isinstance(value, Link):
+        value = await value.fetch()
+
+    return value
+
+
 async def generate_modal(
         ctx: Context,
         model: Type[Document],
+        title: Optional[str] = None,
         instruction: Optional[str] = None,
-        edit_instance: Optional[Document] = None,
-):
+        edit_instance: Optional[Union[Document, list[Document]]] = None,
+) -> dict[str, any]:
     # from scales.roles import BotRole
+
+    if edit_instance and not isinstance(edit_instance, list):
+        edit_instance = [edit_instance]
+
+    bulk_edit = len(edit_instance) > 1
+
     fields = dict()
     field: ModelField
     for field_name, field in model.__fields__.items():
@@ -56,8 +75,13 @@ async def generate_modal(
 
         # If we are editing existing instance - prefill fields with existing values
         if edit_instance:
-            value = getattr(edit_instance, field_name)
-            prefill = str(value) if value else None
+            if bulk_edit:
+                # values = {getattr(instance, field_name) for instance in edit_instance}
+                values = {await get_field_value(instance, field_name) for instance in edit_instance}
+                prefill = MIXED_VALUES if len(values) > 1 else values.pop()
+            else:
+                value = await get_field_value(edit_instance, field_name)
+                prefill = str(value) if value else None
         else:
             prefill = None
 
@@ -75,8 +99,15 @@ async def generate_modal(
 
         fields[field_name] = modal_field
 
+    if not title:
+        if edit_instance:
+            operation = "Bulk edit" if bulk_edit else "Edit"
+        else:
+            operation = "New"
+        title = f"{operation} {model.__name__}{'s' if bulk_edit else ''}"
+
     return await get_modal_result(ctx,
-                                  f"{'Edit' if edit_instance else 'New'} {model.__name__}",
+                                  title,
                                   fields,
                                   instruction,
                                   )
@@ -113,6 +144,9 @@ async def get_modal_result(ctx: Context,
         )
         components.append(component)
 
+    if len(components) > 5:
+        raise Exception("More than 5 fields are not supported for now")
+    # TODO: handle a case, when we have more than 5 components
     modal = Modal(title=title, components=components)
     await ctx.send_modal(modal)
 

@@ -13,6 +13,7 @@ from dis_snek import AllowedMentions, InteractionContext, Snake, errors, listen,
 from dis_snek.models import Intents
 from motor import motor_asyncio
 
+import utils.db as db
 import utils.log as log_utils
 from config import load_settings
 from utils import misc as utils
@@ -25,7 +26,7 @@ class Bot(Snake):
         self.current_dir: Path = current_dir
 
         self.config = config
-        self.config.default_manage_group = utils.convert_to_db_name(self.config.default_manage_group)
+        self.config.default_manage_group = db.to_db_name(self.config.default_manage_group)  # todo remove?
 
         super().__init__(
             intents=Intents.DEFAULT,
