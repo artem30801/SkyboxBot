@@ -1,4 +1,4 @@
-git+https://github.com/Discord-Snake-Pit/Dis-Snek.git@dev
+git+https://github.com/Discord-Snake-Pit/Dis-Snek.git@45345709ea8b73190a3a312651b8d176037c0b75
 dynaconf
 pymongo[srv]<4,>=3.12
 beanie

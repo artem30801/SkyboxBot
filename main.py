@@ -1,24 +1,21 @@
 import asyncio
 import inspect
 import logging
-import os
 from datetime import datetime
-from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
 import dis_snek.api.events
 from beanie import init_beanie
-from dis_snek import AllowedMentions, InteractionContext, Snake, errors, listen, logger_name
+from dis_snek import AllowedMentions, InteractionContext, Snake, errors, listen
 from dis_snek.models import Intents
 from motor import motor_asyncio
 
-import utils.db as db
 import utils.log as log_utils
 from config import load_settings
 from utils import misc as utils
 
-logger = logging.getLogger()
+logger: log_utils.BotLogger = logging.getLogger()  # type: ignore
 
 
 class Bot(Snake):
@@ -26,7 +23,7 @@ class Bot(Snake):
         self.current_dir: Path = current_dir
 
         self.config = config
-        self.config.default_manage_group = db.to_db_name(self.config.default_manage_group)  # todo remove?
+        # self.config.default_manage_group = db.to_db_name(self.config.default_manage_group)  # todo remove?
 
         super().__init__(
             intents=Intents.DEFAULT,
@@ -109,34 +106,13 @@ async def send_error(ctx, msg):
 
 
 def main():
-    config = load_settings()
-
     current_dir = Path(__file__).parent
 
-    logs_dir = current_dir / "logs"
-    if not os.path.exists(logs_dir):
-        os.makedirs(logs_dir)
-
-    handlers = [
-        TimedRotatingFileHandler(logs_dir / f"bot.log", when="W0", encoding="utf-8"),  # files rotate weekly at mondays
-        logging.StreamHandler(),
-    ]
-
+    config = load_settings()
     log_level = logging.DEBUG if config.debug else logging.INFO
 
-    formatter = logging.Formatter("[%(asctime)s] [%(levelname)-9.9s]-[%(name)-15.15s]: %(message)s")
-
-    logging.setLoggerClass(log_utils.BotLogger)
-    snek_logger = logging.getLogger(logger_name)
-    snek_logger.setLevel(log_level)
-
-    logger.setLevel(log_level)
-
-    for handler in handlers:
-        handler.setFormatter(formatter)
-        handler.setLevel(log_level)
-
-        logger.addHandler(handler)
+    logs_dir = current_dir / "logs"
+    log_utils.configure_logging(logger, logs_dir, log_level)
 
     bot = Bot(current_dir, config)
     asyncio.run(bot.startup())

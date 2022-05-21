@@ -59,6 +59,7 @@ class RoleGroup(Document):
     exclusive_roles: bool = False
     description: str = ""
 
+    # Validators
     validate_name = validator("name", allow_reuse=True)(db.validate_name)
 
     @before_event(ValidateOnSave)
@@ -82,21 +83,17 @@ class RoleGroup(Document):
 
 
 class BotRole(Document):
-    role_id: Indexed(int) = Field(editable=False)
-    name: str = Field(editable=False)  # Just to make it easier to look at raw DB data
-    group: Link[RoleGroup]
-    assignable: bool = False
-    description: str = ""
-    # TODO: add validator for emoji with pydantic https://discord.com/channels/570257083040137237/570257083564294197/952670927068491776
-    emoji: Optional[str] = None
+    # TODO: Remove editable, it's just for testing
+    role_id: Indexed(int) = Field(editable=True)
+    # TODO: Remove editable, it's just for testing
+    name: str = Field(editable=True)  # Just to make it easier to look at raw DB data
+    group: Link[RoleGroup] = Field(editable=True)
+    assignable: bool = Field(False, editable=True)
+    description: str = Field("", editable=True)
+    emoji: Optional[str] = Field(None, editable=True)
 
-    @validator("emoji")
-    def validate_emoji(cls, value):
-        if value is None:
-            return value
-        if not utils.is_emoji(value):
-            raise ValidationError(f"{value} is not a valid emoji")
-        return value
+    # Validators
+    validate_emoji = validator("emoji", allow_reuse=True)(db.validate_emoji)
 
     @staticmethod
     def group_request(group: RoleGroup):
@@ -760,7 +757,7 @@ class RoleSelector(Scale):
         return await utils.color_autocomplete(ctx, color)
 
     # Status: TODO
-    @subcommand(base="manage", subcommand_group="group", name="edit_roles")
+    @subcommand(base="manage", subcommand_group="groups", name="edit_roles")
     async def group_edit_roles(
             self,
             ctx: InteractionContext,
@@ -771,13 +768,17 @@ class RoleSelector(Scale):
 
         group = await self.role_group_find(group_name=group, guild=ctx.guild, use_fuzzy_search=False)
         roles = await BotRole.find(BotRole.group_request(group)).to_list()
-        result = await modals.generate_modal(
+        editor = modals.ModalModelEditor(
             ctx=ctx,
             model=BotRole,
-            title="Edit fields you want to change",
-            edit_instance=roles,
+            to_edit=roles
         )
-        await ctx.send(content=str(result))
+
+        result, response_message = await editor.send_modal(
+            title="Edit fields you want to change",
+            ephemeral_response=False,
+        )
+        await response_message.edit(f"Updated {len(result)} roles")
 
     # Status: done, tested
     @group_edit_roles.autocomplete("group")

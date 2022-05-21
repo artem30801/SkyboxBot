@@ -1,7 +1,9 @@
 import logging
+import datetime
 
 from typing import Any
 
+import utils.misc as utils
 import utils.log as log_utils
 
 from pydantic import Field, NonNegativeInt, validator, ValidationError
@@ -21,6 +23,12 @@ class Document(BeanieDocument):
 
     class Settings:
         validate_on_save = True
+        use_state_management = True
+
+        # Cache config
+        use_cache = True
+        cache_expiration_time = datetime.timedelta(seconds=10)
+        cache_capacity = 20
 
 
 class Ordered:
@@ -32,14 +40,15 @@ async def generic_edit(obj: Document, fields: dict[str, Any]) -> dict[str, tuple
     before = obj.dict()
 
     for key, value in fields.items():
-        if value is None:
-            continue
-        # if isinstance(value, str) and value.lower() == "none":
-        #     value =
         setattr(obj, key, value)
 
+    if not obj.is_changed:
+        return {}
+
     logger.db(f"Updating {obj}")
-    await obj.save()
+    # Without this validator for links is failing...
+    # There might be a better workaround for that?
+    await obj.save_changes()
 
     after = obj.dict()
     diff = {key: (after[key], before[key])
@@ -68,6 +77,13 @@ def to_display_name(name: str) -> str:
 def validate_name(cls, value):
     return to_db_name(value)
 
+
+def validate_emoji(cls, value):
+    if value is None:
+        return value
+    if not utils.is_emoji(value):
+        raise ValidationError(f"{value} is not a valid emoji")
+    return value
 
 # def validate_color(color: str):
 #     """Removes color description from the incorrect client autocomplete logic and checks, if the color is valid"""

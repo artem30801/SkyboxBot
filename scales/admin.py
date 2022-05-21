@@ -69,21 +69,25 @@ class Admin(Scale):
         await ctx.send(choices)
 
     @subcommand("bot", name="test")
-    async def test(self, ctx: InteractionContext, test: slash_str_option("123")):
-        from scales.roles import RoleGroup
-        from utils.modals import generate_modal
+    async def test(self, ctx: InteractionContext):
+        from scales.roles import RoleGroup, BotRole
+        # from utils.modals import get_document_modal_results
 
-        model = await RoleGroup.find_one(RoleGroup.name == "Managed")
-        result = await generate_modal(ctx, RoleGroup)
-        print(result)
-        await ctx.guild.fetch_custom_emoji()
+        model = await BotRole.find_one(BotRole.name == "Ziva")
+        await model.fetch_all_links()
+        assert model
+        print(model.group)
+        await model.save_changes()
+        # result = await get_document_modal_results(ctx, RoleGroup)
+        # print(result)
+        # await ctx.guild.fetch_custom_emoji()
 
-    @test.autocomplete("test")
-    async def _test(self, ctx: dis_snek.AutocompleteContext, **kwargs):
-        # import datetime
-        now: dis_snek.Timestamp = dis_snek.Timestamp.now()
-
-        await ctx.send([str(now)])
+    # @test.autocomplete("test")
+    # async def _test(self, ctx: dis_snek.AutocompleteContext, **kwargs):
+    #     # import datetime
+    #     now: dis_snek.Timestamp = dis_snek.Timestamp.now()
+    #
+    #     await ctx.send([str(now)])
 
 
 def setup(bot):
