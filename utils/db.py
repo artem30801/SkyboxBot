@@ -82,7 +82,7 @@ def validate_emoji(cls, value):
     if value is None:
         return value
     if not utils.is_emoji(value):
-        raise ValidationError(f"{value} is not a valid emoji")
+        raise ValueError(f"{value} is not a valid emoji")
     return value
 
 # def validate_color(color: str):

@@ -69,10 +69,11 @@ def get_developer_ping(guild: dis_snek.Guild) -> str:
 
 def is_emoji(emoji_string: str) -> bool:
     """Checks, if passed string is emoji (discord or UTF one)"""
+    # Check if it is UTF emoji
     if emoji.is_emoji(emoji_string):
         return True
     # Emoji names must be at least 2 characters long and can only contain alphanumeric characters and underscores
-    return bool(re.fullmatch(r"<:\w{2,}:[0-9]+>", emoji_string))
+    return bool(re.fullmatch(r"<:\w{2,}:\d+>", emoji_string))
 
 
 class SystemEmojis(enum.IntEnum):

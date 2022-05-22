@@ -29,6 +29,7 @@ class ModelEditor:
     to_edit: list[Document] = attr.field(factory=list)
 
     fields: dict[str, EditorField] = attr.field(factory=dict, init=False)
+    edited: list[Document] = attr.field(factory=list, init=False)
 
     MIXED_VALUES = "<MIXED VALUES>"
     NONE_VALUE = "NONE"
@@ -89,8 +90,11 @@ class ModelEditor:
         """
         if type_ is bool:
             return self.bool_converter
-        elif type_ is str:
-            return self.str_converter
+        # elif type_ is str:
+        #     return self.str_converter
+
+        if field.allow_none:
+            pass
 
         return type_
 
@@ -109,8 +113,8 @@ class ModelEditor:
         """
         If we are editing existing instance - prefill fields with existing values
         """
-        values = {self._get_field_value(instance, field.name) for instance in self.to_edit}
-        prefill = self.MIXED_VALUES if len(values) > 1 else str(values.pop())
+        values = {str(self._get_field_value(instance, field.name)) for instance in self.to_edit}
+        prefill = self.MIXED_VALUES if len(values) > 1 else values.pop()
         return prefill
 
     def _get_field_value(self, obj: Any, field: str) -> Any:
@@ -136,8 +140,14 @@ class ModelEditor:
         return placeholder
 
     # Convertors
+    # @classmethod
+    # def str_converter(cls, to_convert: str):
+    #     if to_convert.casefold() == cls.NONE_VALUE.casefold():
+    #         return None
+    #     return to_convert
+
     @classmethod
-    def str_converter(cls, to_convert: str):
+    def none_converter(cls, to_convert: str):
         if to_convert.casefold() == cls.NONE_VALUE.casefold():
             return None
         return to_convert
@@ -160,23 +170,34 @@ class ModalModelEditor(ModelEditor):
         modals = self.generate_modals(title, instruction)
         assert modals
         responses = []
-        for modal in modals:
-            send_target = responses[-1] if responses else self.ctx
+        send_target = self.ctx
+        for i, modal in enumerate(modals, 1):
             await send_target.send_modal(modal)
             response = await self.ctx.bot.wait_for_modal(modal)
             responses.append(response)
+
+            if i < len(modals):
+                btn = dis_snek.Button(
+                    style=dis_snek.ButtonStyles.BLUE,
+                    label="Next",
+                    emoji="⏭️",
+                )
+                msg = await response.send(
+                    f"Click to proceed to the next page of the modal (`{i+1}/{len(modals)}`)",
+                    components=btn,
+                    ephemeral=True,
+                )
+                event = await self.ctx.bot.wait_for_component(components=btn, timeout=5*60)
+                send_target = event.context
 
         response_message = await responses[-1].send("Processing...", ephemeral=ephemeral_response)
         response_data = await self.process_modal_response(responses)
 
         if self.to_edit:
-            edited = []
             for instance in self.to_edit:
                 diff = await generic_edit(instance, response_data)
                 if diff:
-                    edited.append(edited)
-
-            await response_message.edit("edited")
+                    self.edited.append(instance)
         else:
             pass
 
@@ -212,13 +233,13 @@ class ModalModelEditor(ModelEditor):
             )
             components.append(component)
 
-        blocks = [components[i:i+5] for i in range(0, len(components), 5)]
+        blocks = [components[i:i + 5] for i in range(0, len(components), 5)]
 
         modals = []
         for idx, block in enumerate(blocks):
             modals.append(
                 Modal(
-                    title=title if len(blocks) == 1 else f"{title} {idx+1}/{len(blocks)}",
+                    title=title if len(blocks) == 1 else f"{title} {idx + 1}/{len(blocks)}",
                     components=block,
                 )
             )
@@ -245,182 +266,15 @@ class ModalModelEditor(ModelEditor):
 
             field = self.fields[field_name]
 
+            if response_value == field.value:
+                # Ignore response value when it matches current value of the field
+                continue
+
             converter = field.converter
             converted = converter(response_value)
             if asyncio.iscoroutine(converted):
                 converted = await converted
 
-            if converted == field.value:
-                # Ignore response value when it matches current value of the field
-                continue
-
             results[field_name] = converted
 
         return results
-
-# async def edit_documents_with_modal(
-#         ctx: Context,
-#         to_edit: Union[Document, list[Document]],
-#         title: Optional[str] = None,
-#         instruction: Optional[str] = None,
-#         response_is_ephemeral: bool = True,
-# ) -> (Union[Document, list[Document]], dis_snek.Message):
-#     to_edit_list = to_edit if isinstance(to_edit, list) else [to_edit]
-#     model = type(to_edit_list[0])
-#     modal_results, response_message = await get_document_modal_results(
-#         ctx,
-#         model,
-#         title,
-#         instruction,
-#         to_edit_list,
-#         response_is_ephemeral,
-#     )
-#     # TODO: Deal with validation errors. Here? Better not
-#     edited = []
-#     # for doc in to_edit_list:
-#     #     diff = await generic_edit(doc, modal_results)
-#     #     if diff:
-#     #         edited.append(doc)
-#     return edited, response_message
-#
-#
-# async def get_document_modal_results(
-#         ctx: Context,
-#         doc_type: Type[Document],
-#         title: Optional[str] = None,
-#         instruction: Optional[str] = None,
-#         to_edit: Optional[Union[Document, list[Document]]] = None,
-#         response_is_ephemeral: bool = True,
-# ) -> (dict[str, Any], dis_snek.Message):
-#     if to_edit and not isinstance(to_edit, list):
-#         to_edit = [to_edit]
-#
-#     is_bulk_edit = len(to_edit) > 1
-#
-#     fields = dict()
-#     field: ModelField
-#     for field_name, field in doc_type.__fields__.items():
-#         if "editable" not in field.field_info.extra:
-#             continue
-#         if not field.field_info.extra["editable"]:
-#             continue
-#
-#         # Getting actual type of the field
-#         type_bases = [parent_type for parent_type in field.type_.__mro__[:-1]]
-#         if bool in type_bases:
-#             type_ = bool  # bc bool inherits from int
-#         else:
-#             type_ = type_bases[-1]
-#
-#         # Getting converter for the type
-#         if type_ is bool:
-#             converter = modal_bool_converter
-#         elif type_ is str:
-#             converter = modal_str_converter
-#         else:
-#             converter = type_
-#
-#         # Getting help messages/placeholder for the type
-#         # TODO placeholders help
-#         if type_ is str:
-#             placeholder = f"Text"
-#         elif type_ is bool:
-#             placeholder = f"True/False"
-#         else:
-#             placeholder = None
-#
-#         # If we are editing existing instance - prefill fields with existing values
-#         if to_edit:
-#             if is_bulk_edit:
-#                 # values = {getattr(instance, field_name) for instance in edit_instance}
-#                 values = {await get_field_value(instance, field_name) for instance in to_edit}
-#                 prefill = MIXED_VALUES if len(values) > 1 else str(values.pop())
-#             else:
-#                 value = await get_field_value(to_edit, field_name)
-#                 prefill = str(value) if value else None
-#         else:
-#             prefill = None
-#
-#         # Determine if the filed is "required"
-#         required = not field.allow_none
-#         if type_ is str:
-#             required = required and field.default != ""  # if field.default is emtpy str - allow "not required"
-#
-#         modal_field = EditorField(
-#             converter=converter,
-#             label=field_name,
-#             required=required,
-#             value=prefill,
-#             placeholder=placeholder,
-#         )
-#
-#         fields[field_name] = modal_field
-#
-#     if not title:
-#         if to_edit:
-#             operation = "Bulk edit" if is_bulk_edit else "Edit"
-#         else:
-#             operation = "New"
-#         title = f"{operation} {doc_type.__name__}{'s' if is_bulk_edit else ''}"
-#
-#     return await get_modal_result(
-#         ctx,
-#         title,
-#         fields,
-#         instruction,
-#         response_is_ephemeral,
-#     )
-#
-#
-# async def get_modal_result(
-#         ctx: Context,
-#         title: str,
-#         fields: dict[str, "EditorField"],
-#         instruction: Optional[str] = None,
-#         response_is_ephemeral: bool = True,
-# ) -> (dict[str, Any], dis_snek.Message):
-#     components = []
-#     if instruction:
-#         components.append(
-#             ShortText(
-#                 custom_id="instruction",
-#                 label="Instruction",
-#                 value=instruction,
-#                 required=False,
-#             )
-#         )
-#
-#     for field_name, data in fields.items():
-#         component = ShortText(
-#             custom_id=field_name,
-#             label=data.label,
-#             required=data.required,
-#             value=data.value or dis_snek.MISSING,
-#             placeholder=data.placeholder or dis_snek.MISSING,
-#         )
-#         components.append(component)
-#
-#     groups = [components]
-#
-#     if len(components) > 5:
-#         raise Exception("More than 5 fields are not supported for now")
-#     # TODO: handle a case, when we have more than 5 components
-#     # chain modals?
-#     modal = Modal(title=title, components=components)
-#     await ctx.send_modal(modal)
-#
-#     response = await ctx.bot.wait_for_modal(modal)
-#     response_message = await response.send("Processing...", ephemeral=response_is_ephemeral)
-#     results = dict()
-#     for field_name, response_value in response.kwargs.items():
-#         # TODO: do we have any cases where we want to actually write this value? I think not
-#         if response_value == MIXED_VALUES:
-#             continue
-#         field = fields[field_name]
-#         converter = field.converter
-#         converted = converter(response_value)
-#         if asyncio.iscoroutine(converted):
-#             converted = await converted
-#         results[field_name] = converted
-#
-#     return results, response_message

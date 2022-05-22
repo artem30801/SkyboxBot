@@ -73,6 +73,13 @@ class RoleGroup(Document):
         # ensure priority
         await db.ensure_priority(cls.find(cls.guild_id == self.guild_id), self.priority)
 
+    def __str__(self) -> str:
+        return self.name
+
+    @classmethod
+    def for_ctx(cls, ctx):
+        return cls.find(cls.guild_id == ctx.guild.id)
+
     @property
     def display_name(self):
         return db.to_display_name(self.name)
@@ -83,10 +90,8 @@ class RoleGroup(Document):
 
 
 class BotRole(Document):
-    # TODO: Remove editable, it's just for testing
-    role_id: Indexed(int) = Field(editable=True)
-    # TODO: Remove editable, it's just for testing
-    name: str = Field(editable=True)  # Just to make it easier to look at raw DB data
+    role_id: Indexed(int)
+    name: str  # Just to make it easier to look at raw DB data
     group: Link[RoleGroup] = Field(editable=True)
     assignable: bool = Field(False, editable=True)
     description: str = Field("", editable=True)
@@ -774,11 +779,14 @@ class RoleSelector(Scale):
             to_edit=roles
         )
 
-        result, response_message = await editor.send_modal(
+        changed_data, response_message = await editor.send_modal(
             title="Edit fields you want to change",
             ephemeral_response=False,
         )
-        await response_message.edit(f"Updated {len(result)} roles")
+        if editor.edited:
+            await response_message.edit(f"Updated {len(editor.edited)} roles")
+        else:
+            await response_message.edit("No roles were updated")
 
     # Status: done, tested
     @group_edit_roles.autocomplete("group")
